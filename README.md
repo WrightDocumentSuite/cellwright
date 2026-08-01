@@ -189,15 +189,15 @@ await foreach (RowData row in rows.ReadRowsAsync(0))
 
 | | Write | Allocated | Read | Allocated |
 | --- | ---: | ---: | ---: | ---: |
-| **Cellwright (streaming)** | **3.5 s** | **32 MB** | **3.8 s** | **607 MB** |
-| Cellwright (DOM) | 4.0 s | 78 MB | 5.6 s | 654 MB |
-| ClosedXML 0.105 | 13.3 s | 2 095 MB | 25.5 s | 2 602 MB |
-| EPPlus 8.6 | 16.3 s | 2 142 MB | 17.1 s | 1 782 MB |
+| **Cellwright (streaming)** | **2.5 s** | **32 MB** | **3.0 s** | **607 MB** |
+| Cellwright (DOM) | 2.5 s | 78 MB | 3.1 s | 655 MB |
+| ClosedXML 0.105 | 8.9 s | 2 095 MB | 11.9 s | 2 634 MB |
+| EPPlus 8.6 | 10.7 s | 2 142 MB | 5.2 s | 1 782 MB |
 
-Recalculating 100 000 formulas (VLOOKUP against a lookup table, nested IF, totals) takes 112 ms;
-editing one cell of an already calculated workbook, from 68 µs.
+Recalculating 100 000 formulas (VLOOKUP against a lookup table, nested IF, totals) takes 122 ms;
+editing one cell of an already calculated workbook, from 72 µs.
 
-Legacy `.xls`, 200 000 cells: 51 ms to read against 142 ms for ExcelDataReader, 17.7 MB allocated
+Legacy `.xls`, 200 000 cells: 29 ms to read against 193 ms for ExcelDataReader, 18.1 MB allocated
 against 96.1 MB.
 
 ## Documentation
