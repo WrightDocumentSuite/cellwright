@@ -1,0 +1,60 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+    <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <NeutralLanguage>en</NeutralLanguage>
+    <!-- Keep the selected solution configuration on out-of-solution project references such
+         as the pinned Inkwright source used by Cellwright.Pdf. MSBuild otherwise strips it and
+         also compiles that dependency as Debug during a Release solution build. -->
+    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package metadata defaults">
+    <Authors>Pavel Deecalov</Authors>
+    <Product>Cellwright</Product>
+    <Version>0.1.2</Version>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/WrightDocumentSuite/cellwright</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/WrightDocumentSuite/cellwright.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <IsPackable>false</IsPackable>
+    <!-- The packaged readme is the English, NuGet-facing one; the repository README stays
+         the full development-facing document. -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Symbols and source linking">
+    <!-- Debugging a released package means stepping into its sources. SourceLink ships inside the
+         SDK for GitHub-hosted repositories, so this needs properties rather than a dependency:
+         the repository URL and commit go into the assembly, and a debugger fetches the matching
+         source from GitHub. Sources the build touched but git does not track are embedded,
+         because there is nothing on GitHub for a debugger to fetch for those.
+
+         Deliberately not conditioned on IsPackable, unlike the README item below, and the
+         difference is not an oversight. MSBuild evaluates every property in document order before
+         it evaluates any item: a condition here would read the IsPackable set a few lines up —
+         false — because the project that overrides it to true is imported afterwards. The item
+         group is evaluated in a later pass and does see the project's value. These properties do
+         nothing to a project nobody packs, so setting them for all of them costs nothing and
+         cannot silently do nothing, which the conditioned form would. -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <!-- Packed under the name the readme metadata declares: inside the package it is simply
+         README.md, whatever the source file is called here. -->
+    <None Include="$(MSBuildThisFileDirectory)README.nuget.md" Pack="true" PackagePath="README.md" Visible="false" />
+  </ItemGroup>
+
+</Project>

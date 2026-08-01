@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Cellwright.Benchmarks</RootNamespace>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <TieredPgo>true</TieredPgo>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="ClosedXML" />
+    <PackageReference Include="EPPlus" />
+    <PackageReference Include="ExcelDataReader" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cellwright\Cellwright.csproj" />
+    <ProjectReference Include="..\..\src\Cellwright.Formulas\Cellwright.Formulas.csproj" />
+    <ProjectReference Include="..\..\src\Cellwright.Pdf\Cellwright.Pdf.csproj" />
+    <ProjectReference Include="..\..\src\Cellwright.Xls\Cellwright.Xls.csproj" />
+  </ItemGroup>
+
+</Project>

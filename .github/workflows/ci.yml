@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build:
+    # Both, because the file paths and the culture data differ enough to hide bugs on one of them.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ matrix.os }}-${{ hashFiles('Directory.Packages.props') }}
+          restore-keys: nuget-${{ matrix.os }}-
+
+      - run: dotnet restore Cellwright.slnx
+
+      # Warnings are errors in Directory.Build.props, so a clean build is part of the contract.
+      - run: dotnet build Cellwright.slnx -c Release --no-restore
+
+      # The corpus of real workbooks lives in sibling repositories that are not checked in;
+      # the tests that need it skip themselves, and the rest still cover every unit.
+      - run: dotnet test Cellwright.slnx -c Release --no-build --verbosity normal
+
+      # Again under a culture whose decimal separator is a comma. A spreadsheet is written the
+      # same way wherever it is produced, and one parse that forgets to say so makes a file
+      # that is wrong in Berlin and right in Boston — invisible to a suite run under one locale.
+      - name: Test under another culture
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          CELLWRIGHT_TEST_CULTURE: ru-RU
+        run: dotnet test Cellwright.slnx -c Release --no-build --verbosity normal
+
+      - name: Pack
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet pack Cellwright.slnx -c Release --no-build -o artifacts/packages
+
+      - name: Upload packages
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: artifacts/packages/*.nupkg
+          if-no-files-found: error

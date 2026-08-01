@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cellwright.Pdf.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RootNamespace>Cellwright.Pdf</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Cellwright.Pdf</PackageId>
+    <Description>Renders Cellwright workbooks to PDF the way Excel prints them: the grid with its styles and number formats, two-dimensional pagination with scaling, repeated titles, headers and footers, on top of Inkwright. No Office and no native dependency.</Description>
+    <PackageTags>excel;xlsx;pdf;conversion;export;printing</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cellwright\Cellwright.csproj" />
+    <PackageReference Include="Inkwright" />
+  </ItemGroup>
+
+</Project>

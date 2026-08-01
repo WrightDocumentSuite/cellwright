@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cellwright.Xls.Tests" />
+    <InternalsVisibleTo Include="Cellwright.Benchmarks" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RootNamespace>Cellwright.Xls</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Cellwright.Xls</PackageId>
+    <Description>Binary Excel format support for Cellwright: reads .xls (Excel 97-2003 and older) and .xlsb (BIFF12) workbooks into the same Workbook model, decrypts password-protected files of any format, decodes formulas, extracts VBA macro source, and writes BIFF8 back. Span-based, allocation-light, Native AOT ready.</Description>
+    <PackageTags>excel;xls;xlsb;biff;spreadsheet;legacy;vba;aot</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cellwright\Cellwright.csproj" />
+    <ProjectReference Include="..\Cellwright.Formulas\Cellwright.Formulas.csproj" />
+  </ItemGroup>
+
+</Project>

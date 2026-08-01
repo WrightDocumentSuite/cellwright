@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cellwright.Tests" />
+    <InternalsVisibleTo Include="Cellwright.Formulas" />
+    <InternalsVisibleTo Include="Cellwright.Formulas.Tests" />
+    <InternalsVisibleTo Include="Cellwright.Xls" />
+    <InternalsVisibleTo Include="Cellwright.Xls.Tests" />
+    <InternalsVisibleTo Include="Cellwright.Pdf" />
+    <InternalsVisibleTo Include="Cellwright.Pdf.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RootNamespace>Cellwright</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Cellwright</PackageId>
+    <Description>Modern .NET 10 Excel (.xlsx) library: layered like System.Text.Json — primitives, constant-memory streaming reader/writer, mutable DOM. Data-oriented cell storage, async-first I/O, AOT/trim safe.</Description>
+    <PackageTags>excel;xlsx;spreadsheet;openxml;streaming;aot</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+</Project>

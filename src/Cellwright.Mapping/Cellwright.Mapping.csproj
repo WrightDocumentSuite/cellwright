@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Cellwright.Mapping</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Cellwright.Mapping</PackageId>
+    <Description>Typed row mapping for Cellwright via a Roslyn incremental source generator: zero reflection, Native AOT ready. Read and write sheets as strongly-typed records.</Description>
+    <PackageTags>excel;xlsx;mapping;source-generator;aot</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cellwright\Cellwright.csproj" />
+    <!-- The generator ships inside this package as an analyzer asset. -->
+    <ProjectReference Include="..\Cellwright.Mapping.Generator\Cellwright.Mapping.Generator.csproj"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Artifacts output layout: bin/<project>/<configuration> without a TFM subfolder for single-target projects. -->
+    <None Include="$(ArtifactsPath)\bin\Cellwright.Mapping.Generator\$(Configuration.ToLowerInvariant())\Cellwright.Mapping.Generator.dll"
+          Pack="true"
+          PackagePath="analyzers/dotnet/cs"
+          Visible="false" />
+  </ItemGroup>
+
+</Project>

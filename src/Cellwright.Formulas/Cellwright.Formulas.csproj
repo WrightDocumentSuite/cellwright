@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cellwright.Formulas.Tests" />
+    <InternalsVisibleTo Include="Cellwright.Benchmarks" />
+    <InternalsVisibleTo Include="Cellwright.Xls" />
+    <InternalsVisibleTo Include="Cellwright.Xls.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RootNamespace>Cellwright.Formulas</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Cellwright.Formulas</PackageId>
+    <Description>Formula engine for Cellwright: span-based parser into a compact RPN program, allocation-light stack-machine evaluator with Excel semantics, dependency-driven incremental recalculation and 447 worksheet functions. Zero reflection, Native AOT ready.</Description>
+    <PackageTags>excel;xlsx;formula;calculation;spreadsheet;aot</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cellwright\Cellwright.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Vectorized reductions for large range aggregates. -->
+    <PackageReference Include="System.Numerics.Tensors" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,23 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Cellwright/Cellwright.csproj" />
+    <Project Path="src/Cellwright.Formulas/Cellwright.Formulas.csproj" />
+    <Project Path="src/Cellwright.Mapping/Cellwright.Mapping.csproj" />
+    <Project Path="src/Cellwright.Mapping.Generator/Cellwright.Mapping.Generator.csproj" />
+    <Project Path="src/Cellwright.Pdf/Cellwright.Pdf.csproj" />
+    <Project Path="src/Cellwright.Xls/Cellwright.Xls.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Cellwright.Tests/Cellwright.Tests.csproj" />
+    <Project Path="tests/Cellwright.Formulas.Tests/Cellwright.Formulas.Tests.csproj" />
+    <Project Path="tests/Cellwright.Mapping.Tests/Cellwright.Mapping.Tests.csproj" />
+    <Project Path="tests/Cellwright.Pdf.Tests/Cellwright.Pdf.Tests.csproj" />
+    <Project Path="tests/Cellwright.Xls.Tests/Cellwright.Xls.Tests.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Cellwright.Samples/Cellwright.Samples.csproj" />
+  </Folder>
+</Solution>
