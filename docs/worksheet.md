@@ -210,6 +210,46 @@ sheet.Validations.Add(new DataValidation
 Extended Excel rules (`x14`, lists from another sheet) live in the sheet’s `extLst` and survive
 load-save while rules are unchanged.
 
+## Charts
+
+Charts embedded on a sheet are read and created. `sheet.Charts` lists them; `AddChart` makes one
+over a rectangle of cells, from series that name their data by reference.
+
+```csharp
+sheet.AddChart(ChartKind.Column, "D2:K17", "Data!$B$2:$B$10",
+    categoriesReference: "Data!$A$2:$A$10", title: "Revenue", seriesName: "Sales");
+
+// Several series, in plot order.
+sheet.AddChart(ChartKind.Line, "D20:K35", [
+    new ChartSeriesDefinition("Data!$B$2:$B$10", Name: "This year"),
+    new ChartSeriesDefinition("Data!$C$2:$C$10", Name: "Last year"),
+]);
+
+foreach (Chart chart in sheet.Charts)
+    Console.WriteLine($"{chart.Kind} '{chart.Title}': {chart.Series.Count} series");
+```
+
+`ChartKind` names what the series are plotted as. Six kinds can be created — `Column`, `Bar`,
+`Line`, `Pie`, `Doughnut`, `Area`; `Scatter` and `Radar` are read but asking for one throws,
+because the writer would have to invent markup it has never verified against Excel.
+
+A series carries both its references (`ValuesReference`, `CategoriesReference`) and the values
+the file cached for them (`Values`, `Categories`). Both are kept on purpose: the references are
+what the series *means*, the caches are what it *showed*. `AddChart` fills the caches from the
+live cells at that moment, the way Excel fills them when it last drew the chart — a reader that
+never recalculates still has something honest to draw, which is what
+[PDF export](pdf-export.md#charts) relies on.
+
+The anchor names the cells the chart covers. `"D2:K17"` means exactly that rectangle; the frame
+stored in the file reaches one cell further, because a drawing anchor's far corner is exclusive.
+
+**What cannot be done.** A loaded chart cannot be edited — only read, removed, and recreated. Its
+raw `chartSpace` is the source of truth and is written back byte for byte, which is what keeps
+axis styling, layout and everything else §21.2 can say that this model does not name. Adding or
+removing any chart regenerates the sheet's drawing, and then only what the model holds — pictures
+and charts — is written back; foreign shapes and text boxes that shared the drawing are lost and
+reported as `DrawingShapesNotWritten`.
+
 ## Conditional formatting
 
 Rules are read, edited, and created anew. Order is by `Priority`: lower numbers are tried first;
