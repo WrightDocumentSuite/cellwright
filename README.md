@@ -2,86 +2,96 @@
 
 [![CI](https://github.com/WrightDocumentSuite/cellwright/actions/workflows/ci.yml/badge.svg)](https://github.com/WrightDocumentSuite/cellwright/actions/workflows/ci.yml)
 
-Современная .NET 10 библиотека для xlsx (Apache-2.0). Слоёная архитектура в духе `System.Text.Json`:
-примитивы → стриминг → DOM → типизированный маппинг через source generator, плюс отдельный
-пакет с формульным движком.
+A modern .NET 10 library for xlsx (Apache-2.0). Layered like `System.Text.Json`: primitives →
+streaming → DOM → typed mapping through a source generator, plus a separate package for the
+formula engine.
 
-## Возможности v1
+## What it does
 
-- **Стриминг с константной памятью**: `XlsxWriter` (forward-only, UTF-8 напрямую,
-  `params ReadOnlySpan<CellValue>`) и `XlsxReader` (`IAsyncEnumerable<RowData>`).
-- **DOM**: `Workbook`/`Worksheet` с data-oriented хранением — колоночные слайсы
-  страницами по 512 строк, ни одного объекта на ячейку. Значения, стили, формулы
-  (round-trip текстом), merge, freeze panes, скрытые листы.
-- **Полнота листа**: скрытые строки и столбцы, группировка, автофильтр, гиперссылки,
-  примечания, таблицы Excel, проверка данных, условное форматирование, настройки печати,
-  защита листа и книги, цвет ярлыка и масштаб.
-- **Структурная правка**: вставка и удаление строк и столбцов со сдвигом всего, что к ним
-  привязано, и перенацеливанием формул всей книги; перестановка и копирование листов.
-- **Свойства документа**: `Title`, `Author`, `Company`, даты и произвольные поля — то, что
-  Excel показывает во вкладке «Сведения», а книга, созданная с нуля, раньше не несла вовсе.
-- **Правка чужих файлов без потерь**: диаграммы, сводные таблицы, картинки, темы, макросы
-  `.xlsm` переносятся в сохранённый файл как есть; переименование листа тянет за собой
-  формулы, имена и ссылки диаграмм.
-- **Стили**: immutable records + бесплатное интернирование; fluent-строители на
-  C# 14 extension members: `CellStyle.Default.Bold().Fill(0xFF2278D4).NumberFormat("#,##0.00")`.
-  Покрыт весь §18.8: узорные и градиентные заливки, диагонали, поворот текста, цвета темы,
-  защита ячеек, стили строк и столбцов целиком; именованные стили ячеек и `dxf`-форматы
-  загруженного файла сохраняются и читаются.
-- **`CellValue`** — 24-байтный tagged union без боксинга; даты с тиковой точностью,
-  честные конверсии серийных дат (1900-баг, система 1904).
-- **Типизированный маппинг** (`Cellwright.Mapping`): `[ExcelRow]` + incremental source
-  generator → `IRowSchema<T>` (static abstract members), zero reflection, Native AOT.
-- **Формульный движок** (`Cellwright.Formulas`): 447 функций — 352 из 356 по §18.17.7
-  ISO/IEC 29500 (без четырёх японо-тайских), включая ценные бумаги, инженерные, комплексные,
-  Бесселя, корреляцию и тесты гипотез, — инкрементальный пересчёт по графу зависимостей,
-  детекция циклов, разворачивание shared-формул, defined names, структурные ссылки
-  `Таблица[Колонка]`, 3-D диапазоны `Q1:Q4!A1`, ссылки в закрытые книги из кэша
-  `externalLink`, `LET` и `TEXT`.
-- **Legacy `.xls`** (`Cellwright.Xls`): чтение BIFF8, BIFF5 и BIFF2–4 в тот же `Workbook`,
-  запись BIFF8 (включая примечания через слой Office Art, проверки данных и настройки печати),
-  расшифровка XOR/RC4/RC4 CryptoAPI, декодирование и кодирование формул Ptg, чтение условного
-  форматирования и картинок из слоя Escher. Конвертация xls → xlsx получается сама собой —
-  вместе с картинками, — а `XlsReader` отдаёт строки потоком, если модель не нужна.
-- **Двоичный `.xlsb`** (`Cellwright.Xls`): чтение записей BIFF12 в тот же `Workbook` — значения,
-  стили, строки, формулы со структурными ссылками, примечания, проверка данных, условное
-  форматирование, таблицы и картинки, включая зашифрованные книги. Записи `.xlsb` нет: сохранять
-  в xlsx или `.xls`.
-- **Картинки и тема**: изображения читаются из всех трёх форматов и пишутся в xlsx, байты не
-  пережимаются; `xl/theme/theme1.xml` разбирается, так что цвет темы разрешается в конкретный
-  ARGB вместе с тинтом — см. [pictures.md](docs/pictures.md).
-- **Пароль на открытие**: зашифрованный `.xlsx` и `.xlsb` — тот же контейнер MS-CFB, поэтому их
-  читает `Cellwright.Xls`: обе схемы MS-OFFCRYPTO, шифры AES/DES/3DES/RC2, все пять хэшей,
-  плюс проверка HMAC над пакетом. Пишется тоже — `SaveEncryptedAsync` кладёт книгу под agile
-  AES-256/SHA-512, как это делает Excel; записанное открывают NPOI и ExcelDataReader.
-- **Макросы**: исходники VBA извлекаются из `.xlsm` и `.xls` — распаковка MS-OVBA, виды модулей,
-  подключённые библиотеки, состояние защиты. Пароль на проект исходник не прячет.
-- **Экспорт в Markdown**: `book.ToMarkdown()` отдаёт документ GitHub Flavored Markdown — лист
-  разделом с таблицей, значения отрендерены как в Excel, объединения, гиперссылки, картинки
-  галереей; `ExportMarkdownAsync` кладёт `workbook.md` и `media/` в каталог. Чистое преобразование
-  модель → текст, без бинарных зависимостей — см. [markdown.md](docs/markdown.md).
-- **Печать в PDF** (`Cellwright.Pdf`): `book.SaveAsPdf("отчёт.pdf")` печатает книгу так, как её
-  печатает Excel — сетка со стилями и числовыми форматами, объединения, перенос и вытекание текста,
-  повороты, картинки по якорям, двумерная разбивка на страницы с масштабом и `FitToWidth`,
-  повторяющиеся заголовки, колонтитулы с `&P`/`&N`/`&A`. Опционально с деревом структуры (лист —
-  таблица, ячейки — `TD`/`TH`). Ничего не запускается снаружи, шрифты не подменяются молча —
-  каждая подмена названа в диагностике; см. [pdf-export.md](docs/pdf-export.md).
-- **Диагностика вместо тихих отказов**: recovery-ориентированная загрузка,
-  `WorkbookWarning` с кодами, `LoadDiagnostics`; файл не того формата (`.ods`, `.docx`,
-  зашифрованный пакет) называется по имени, а не роняет парсер.
-- **Чужой файл как враждебный ввод**: `LoadOptions.Limits` ограничивает, во что пакету
-  позволено развернуться, — zip-бомба получает сообщение, а не `OutOfMemoryException`.
-- **Async-first**: I/O пакета на асинхронных `ZipArchive` API .NET 10.
+- **Constant-memory streaming**: `XlsxWriter` (forward-only, UTF-8 straight to the wire,
+  `params ReadOnlySpan<CellValue>`) and `XlsxReader` (`IAsyncEnumerable<RowData>`).
+- **DOM**: `Workbook`/`Worksheet` with data-oriented storage — column slices in 512-row pages,
+  not one object per cell. Values, styles, formulas (round-tripped as text), merges, freeze
+  panes, hidden sheets.
+- **A complete worksheet**: hidden rows and columns, grouping, auto-filter, hyperlinks, notes and
+  threaded comments, Excel tables, data validation, conditional formatting, page setup, sheet and
+  workbook protection, tab colour and zoom.
+- **Structural editing**: inserting and deleting rows and columns, moving everything anchored to
+  them and retargeting the whole workbook's formulas; reordering and copying sheets.
+- **Document properties**: `Title`, `Author`, `Company`, dates and custom fields — what Excel
+  shows on its Info tab, which a workbook built from scratch used not to carry at all.
+- **Lossless editing of foreign files**: pivot tables, themes and `.xlsm` macros travel into the
+  saved file as they were; renaming a sheet takes the formulas, defined names and chart
+  references with it.
+- **Styles**: immutable records with free interning; fluent builders on C# 14 extension members:
+  `CellStyle.Default.Bold().Fill(0xFF2278D4).NumberFormat("#,##0.00")`. All of §18.8 is covered:
+  pattern and gradient fills, diagonals, text rotation, theme colours, cell protection, whole-row
+  and whole-column styles; named cell styles and the `dxf` formats of a loaded file are kept and
+  readable.
+- **Rich text**: character formatting inside a cell — `cell.RichText` reads the runs a file
+  carries, `cell.SetRichText(...)` writes new ones.
+- **`CellValue`** — a 24-byte tagged union with no boxing; dates at tick precision, honest serial
+  date conversion (the 1900 bug, the 1904 system).
+- **Typed mapping** (`Cellwright.Mapping`): `[ExcelRow]` + an incremental source generator →
+  `IRowSchema<T>` (static abstract members), zero reflection, Native AOT.
+- **Formula engine** (`Cellwright.Formulas`): 447 functions — 352 of the 356 in §18.17.7 of
+  ISO/IEC 29500 (all but four Japanese and Thai ones), including securities, engineering, complex
+  numbers, Bessel, correlation and hypothesis tests — with incremental recalculation over a
+  dependency graph, cycle detection, shared-formula expansion, defined names, structured
+  references `Table[Column]`, 3-D ranges `Q1:Q4!A1`, references into closed workbooks from the
+  `externalLink` cache, `LET` and `TEXT`.
+- **Dynamic array spill**: a formula returning an array occupies its rectangle, `A1#` references
+  the whole of it, and anything in the way makes it `#SPILL!` rather than a partial answer.
+- **Charts**: embedded charts are read (kind, title, series with their references and cached
+  points) and created (`sheet.AddChart(ChartKind.Column, "D2:K17", "Data!$B$2:$B$10")`); an
+  untouched chart's markup is written back byte for byte.
+- **Legacy `.xls`** (`Cellwright.Xls`): reads BIFF8, BIFF5 and BIFF2–4 into the same `Workbook`,
+  writes BIFF8 (notes through the Office Art layer, pictures, conditional formatting, data
+  validation and page setup), decrypts XOR/RC4/RC4 CryptoAPI, decodes and encodes Ptg formulas.
+  Converting xls → xlsx falls out of that for free — pictures included — and `XlsReader` streams
+  rows when the model is not wanted.
+- **Binary `.xlsb`** (`Cellwright.Xls`): reads BIFF12 records into the same `Workbook` — values,
+  styles, rows, formulas with structured references, notes, data validation, conditional
+  formatting, tables and pictures, encrypted workbooks included. There is no `.xlsb` writer: save
+  to xlsx or `.xls`.
+- **Pictures and theme**: images are read from all three formats and written to xlsx and `.xls`,
+  with the bytes never re-encoded; `xl/theme/theme1.xml` is parsed, so a theme colour resolves to
+  a concrete ARGB along with its tint — see [pictures.md](docs/pictures.md).
+- **Password to open**: an encrypted `.xlsx` and `.xlsb` are the same MS-CFB container, so
+  `Cellwright.Xls` reads them: both MS-OFFCRYPTO schemes, AES/DES/3DES/RC2 ciphers, all five
+  hashes, plus an HMAC check over the package. It writes them too — `SaveEncryptedAsync` puts a
+  workbook under agile AES-256/SHA-512, the way Excel does; NPOI and ExcelDataReader open the
+  result.
+- **Macros**: VBA sources are extracted from `.xlsm` and `.xls` — MS-OVBA decompression, module
+  kinds, referenced libraries, protection state. A project password does not hide the source.
+- **Markdown export**: `book.ToMarkdown()` produces a GitHub Flavored Markdown document — a sheet
+  becomes a section with a table, values rendered as Excel renders them, merges, hyperlinks and a
+  gallery of pictures; `ExportMarkdownAsync` writes `workbook.md` and `media/` into a directory. A
+  pure model → text conversion with no binary dependency — see [markdown.md](docs/markdown.md).
+- **PDF output** (`Cellwright.Pdf`): `book.SaveAsPdf("report.pdf")` prints a workbook the way
+  Excel prints it — the grid with its styles and number formats, merges, wrapping and overflow,
+  rotation, pictures on their anchors, conditional formatting worked out rather than ignored,
+  charts drawn, two-dimensional pagination with scaling and `FitToWidth`, repeated titles, headers
+  and footers with `&P`/`&N`/`&A`. Optionally with a structure tree (a sheet is a table, cells are
+  `TD`/`TH`). Nothing is launched outside the process, and no font is substituted silently — every
+  substitution is named in the diagnostics; see [pdf-export.md](docs/pdf-export.md). The same
+  package also sizes columns and rows to their contents: `sheet.AutoFit()`.
+- **Diagnostics instead of silent failure**: recovery-oriented loading, `WorkbookWarning` with
+  codes, `LoadDiagnostics`; a file of the wrong format (`.ods`, `.docx`, an encrypted package) is
+  named for what it is rather than crashing the parser.
+- **A foreign file is hostile input**: `LoadOptions.Limits` caps what a package is allowed to
+  expand into — a zip bomb gets a message, not an `OutOfMemoryException`.
+- **Async-first**: package I/O on the asynchronous `ZipArchive` APIs of .NET 10.
 
-## Быстрый пример
+## A quick look
 
 ```csharp
 using Cellwright;
 
 // DOM
 var book = Workbook.Create();
-Worksheet sheet = book.Sheets.Add("Продажи");
-sheet["A1"] = "Товар";
+Worksheet sheet = book.Sheets.Add("Sales");
+sheet["A1"] = "Product";
 sheet["B1"] = 1234.5;
 sheet.Range("A1:B1").Style(s => s.Bold().Fill(0xFF2278D4));
 sheet.Cell("B3").SetFormula("SUM(B1:B2)");
@@ -89,12 +99,12 @@ sheet.Column("A").SetWidth(24);
 sheet.AutoFilter("A1:B3");
 await book.SaveAsync("sales.xlsx");
 
-// Правка реального отчёта: диаграммы, сводные и макросы остаются на месте
-Workbook report = await Workbook.LoadAsync("отчёт.xlsm");
+// Editing a real report: charts, pivot tables and macros stay where they were
+Workbook report = await Workbook.LoadAsync("report.xlsm");
 report.Sheets[0]["B7"] = 42;
-await report.SaveAsync("отчёт-обновлён.xlsm");
+await report.SaveAsync("report-updated.xlsm");
 
-// Стриминг миллионов строк
+// Streaming millions of rows
 await using XlsxWriter writer = await XlsxWriter.CreateAsync("big.xlsx");
 XlsxSheetWriter data = await writer.BeginSheetAsync("Data");
 for (int i = 1; i <= 1_000_000; i++)
@@ -105,7 +115,7 @@ for (int i = 1; i <= 1_000_000; i++)
 ```
 
 ```csharp
-// Типизированные строки (Cellwright.Mapping, source generator)
+// Typed rows (Cellwright.Mapping, source generator)
 [ExcelRow]
 public partial record Order(
     [ExcelColumn("Order ID")] int Id,
@@ -118,97 +128,99 @@ await sheet.WriteRowsAsync(orders);
 ```
 
 ```csharp
-// Формулы (Cellwright.Formulas)
+// Formulas (Cellwright.Formulas)
 sheet.Cell("D2").SetFormula("B2*C2*VLOOKUP(A2,Rates!$A$2:$B$9,2,FALSE)");
-sheet.Cell("D3").SetFormula("LET(итог,SUM(Продажи[Сумма]),TEXT(итог,\"#,##0.00\"))");
-sheet.Cell("D4").SetFormula("PMT(0.08/12,60,30000)");            // -608,29
-sheet.Cell("D5").SetFormula("DSUM(База!A1:E99,\"Прибыль\",Условия!A1:B2)");
-sheet.Cell("D6").SetFormula("SUM(FILTER(B2:B99,A2:A99=\"Север\"))");
-sheet.Cell("D7").SetFormula("NORM.DIST(42,40,1.5,TRUE)");        // 0,908789
-CalculationSummary summary = book.Calculate();   // первый раз считает всё
+sheet.Cell("D3").SetFormula("LET(total,SUM(Sales[Amount]),TEXT(total,\"#,##0.00\"))");
+sheet.Cell("D4").SetFormula("PMT(0.08/12,60,30000)");            // -608.29
+sheet.Cell("D5").SetFormula("DSUM(Records!A1:E99,\"Profit\",Criteria!A1:B2)");
+sheet.Cell("D6").SetFormula("SUM(FILTER(B2:B99,A2:A99=\"North\"))");
+sheet.Cell("D7").SetFormula("NORM.DIST(42,40,1.5,TRUE)");        // 0.908789
+sheet.Cell("F2").SetFormula("SORT(UNIQUE(A2:A99))");             // spills down F
+CalculationSummary summary = book.Calculate();   // the first pass computes everything
 sheet["B2"] = 500;
-book.Calculate();                                 // дальше — только зависимое
+book.Calculate();                                 // afterwards, only what depends on it
 CellValue total = book.Evaluate("SUM(Report!D2:D9)");
 ```
 
 ```csharp
-// Правка структуры: всё привязанное к ячейкам едет за ними, формулы книги перенацеливаются
+// Structural editing: everything anchored to the cells moves with them,
+// and the workbook's formulas are retargeted
 sheet.InsertRows(2, 3);
 sheet.DeleteColumns(5);
-sheet.Name = "Q1 2026";                       // формулы, имена и ссылки диаграмм следуют за листом
-book.Sheets.Copy("Q1 2026", "Q2 2026");       // копия со всем содержимым, сразу за оригиналом
-book.Sheets.Move("Итоги", 0);
+sheet.Name = "Q1 2026";                       // formulas, names and chart references follow the sheet
+book.Sheets.Copy("Q1 2026", "Q2 2026");       // a full copy, placed right after the original
+book.Sheets.Move("Summary", 0);
 
-book.Properties.Title = "Отчёт за квартал";   // вкладка «Сведения» в Excel
-book.Properties.Custom["Отдел"] = CellValue.Text("Финансы");
+book.Properties.Title = "Quarterly report";   // the Info tab in Excel
+book.Properties.Custom["Department"] = CellValue.Text("Finance");
 ```
 
 ```csharp
-// Legacy .xls (Cellwright.Xls): читается в тот же Workbook, сохраняется куда угодно
-Workbook legacy = await XlsWorkbook.LoadAsync("отчёт-2003.xls");
-await legacy.SaveAsync("отчёт-2026.xlsx");            // конвертация из коробки
-await legacy.SaveXlsAsync("отчёт-2003-обновлён.xls"); // или обратно в бинарный
+// Legacy .xls (Cellwright.Xls): read into the same Workbook, saved wherever you like
+Workbook legacy = await XlsWorkbook.LoadAsync("report-2003.xls");
+await legacy.SaveAsync("report-2026.xlsx");            // conversion out of the box
+await legacy.SaveXlsAsync("report-2003-updated.xls");  // or back into binary
 
-Workbook any = await Spreadsheet.LoadAsync(uploaded); // xlsx, xls или xlsb — по содержимому
+Workbook any = await Spreadsheet.LoadAsync(uploaded);  // xlsx, xls or xlsb — decided by content
 
-// Двоичный .xlsb читается тем же вызовом
-Workbook binary = await Spreadsheet.LoadAsync("отчёт.xlsb");
-await binary.SaveAsync("отчёт.xlsx");
+// Binary .xlsb is read by the same call
+Workbook binary = await Spreadsheet.LoadAsync("report.xlsb");
+await binary.SaveAsync("report.xlsx");
 
-// Пароль на открытие — что у бинарного файла, что у пакета
-Workbook locked = await Spreadsheet.LoadAsync("закрытый.xlsx", new XlsLoadOptions { Password = "секрет" });
+// A password to open — for a binary file as much as for a package
+Workbook locked = await Spreadsheet.LoadAsync("locked.xlsx", new XlsLoadOptions { Password = "secret" });
 
-// Макросы: исходники и подключённые библиотеки из обоих форматов
-VbaProject? macros = await VbaProject.LoadAsync("отчёт.xlsm");
+// Macros: sources and referenced libraries from both formats
+VbaProject? macros = await VbaProject.LoadAsync("report.xlsm");
 foreach (VbaModule module in macros?.Modules ?? [])
-    Console.WriteLine($"{module.Kind} {module.Name}: {module.Code.Length} символов");
+    Console.WriteLine($"{module.Kind} {module.Name}: {module.Code.Length} characters");
 foreach (VbaReference reference in macros?.References ?? [])
     Console.WriteLine($"{reference.Name}: {reference.Description}");
 
-// Только значения, без модели
-await using XlsReader rows = await XlsReader.OpenAsync("выгрузка.xls");
+// Values only, without the model
+await using XlsReader rows = await XlsReader.OpenAsync("export.xls");
 await foreach (RowData row in rows.ReadRowsAsync(0))
     Console.WriteLine(row.GetValueOrBlank(0));
 ```
 
-## Производительность
+## Performance
 
-100 000 строк × 20 колонок (2 млн ячеек), детали в [docs/benchmarks.md](docs/benchmarks.md):
+100 000 rows × 20 columns (2 million cells); details in [docs/benchmarks.md](docs/benchmarks.md):
 
-| | Запись | Аллокации | Чтение | Аллокации |
+| | Write | Allocated | Read | Allocated |
 | --- | ---: | ---: | ---: | ---: |
 | **Cellwright (streaming)** | **3.5 s** | **32 MB** | **3.8 s** | **607 MB** |
 | Cellwright (DOM) | 4.0 s | 78 MB | 5.6 s | 654 MB |
 | ClosedXML 0.105 | 13.3 s | 2 095 MB | 25.5 s | 2 602 MB |
 | EPPlus 8.6 | 16.3 s | 2 142 MB | 17.1 s | 1 782 MB |
 
-Пересчёт 100 000 формул (VLOOKUP по справочнику, вложенные IF, итоги) — 112 мс; правка одной
-ячейки в посчитанной книге — от 68 мкс.
+Recalculating 100 000 formulas (VLOOKUP against a lookup table, nested IF, totals) takes 112 ms;
+editing one cell of an already calculated workbook, from 68 µs.
 
-Legacy `.xls`, 200 000 ячеек: чтение 51 мс против 142 мс у ExcelDataReader, аллокации
-17.7 MB против 96.1 MB.
+Legacy `.xls`, 200 000 cells: 51 ms to read against 142 ms for ExcelDataReader, 17.7 MB allocated
+against 96.1 MB.
 
-## Документация
+## Documentation
 
-- [Быстрый старт](docs/getting-started.md)
-- [Архитектура](docs/architecture.md)
-- [Стриминг](docs/streaming.md)
-- [Лист: строки, столбцы и всё вокруг ячеек](docs/worksheet.md)
-- [Стили](docs/styles.md)
-- [Маппинг](docs/mapping.md)
-- [Формулы](docs/formulas.md)
+- [Getting started](docs/getting-started.md)
+- [Architecture](docs/architecture.md)
+- [Streaming](docs/streaming.md)
+- [Worksheet: rows, columns and everything around cells](docs/worksheet.md)
+- [Styles](docs/styles.md)
+- [Mapping](docs/mapping.md)
+- [Formulas](docs/formulas.md)
 - [Legacy .xls](docs/xls.md)
-- [Двоичный .xlsb](docs/xlsb.md)
-- [Картинки и цвета темы](docs/pictures.md)
-- [Экспорт в Markdown](docs/markdown.md)
-- [Печать в PDF](docs/pdf-export.md)
-- [Макросы (VBA)](docs/vba.md)
-- [Соответствие спецификациям](docs/conformance.md)
-- [Бенчмарки](docs/benchmarks.md)
+- [Binary .xlsb](docs/xlsb.md)
+- [Pictures and theme colours](docs/pictures.md)
+- [Markdown export](docs/markdown.md)
+- [PDF output](docs/pdf-export.md)
+- [Macros (VBA)](docs/vba.md)
+- [Specification conformance](docs/conformance.md)
+- [Benchmarks](docs/benchmarks.md)
 
-## Сборка
+## Building
 
-Требуется .NET 10 SDK.
+Requires the .NET 10 SDK.
 
 ```bash
 dotnet build Cellwright.slnx
@@ -217,39 +229,42 @@ dotnet run -c Release --project benchmarks/Cellwright.Benchmarks -- --filter * -
 dotnet run --project samples/Cellwright.Samples
 ```
 
-CI собирает и прогоняет тесты на Linux и Windows при каждом push и pull request
-(`.github/workflows/ci.yml`). Корпус реальных книг лежит в соседних репозиториях, которых в
-git нет, — зависящие от него тесты там пропускаются сами.
+CI builds and runs the tests on Linux and Windows for every push and pull request
+(`.github/workflows/ci.yml`). The corpus of real workbooks lives in sibling repositories that are
+not in git — the tests that depend on it skip themselves there.
 
-## Структура
+## Layout
 
 ```
-src/Cellwright                    ядро: примитивы, OPC, стриминг, DOM, стили
-src/Cellwright.Formulas           формульный движок: парсер, исполнитель, пересчёт
-src/Cellwright.Pdf                печать в PDF поверх Inkwright: сетка, страницы, колонтитулы
-src/Cellwright.Xls                двоичные форматы: CFB, BIFF8 (.xls), BIFF12 (.xlsb), Ptg-формулы,
-                                  расшифровка, извлечение VBA
-src/Cellwright.Mapping            атрибуты + runtime маппинга
-src/Cellwright.Mapping.Generator  Roslyn incremental generator (пакуется в Mapping)
-tests/                            xUnit: 1834 теста (прогоняются дважды, второй раз под культурой
-                                  с запятой в дробях), включая OpenXml-валидатор, interop с ClosedXML,
-                                  round-trip ~400 реальных xlsx и xlsm без потери частей, 844 реальных
-                                  .xls и 66 .xlsb со сверкой значений, гиперссылок, свойств документа,
-                                  картинок и цветов темы против ExcelDataReader и NPOI, сверку 64 книг,
-                                  лежащих в корпусе сразу в двух форматах, пересчёт формул трёх форматов
-                                  против значений Excel, расхождения Excel со стандартом по MS-OI29500,
-                                  595 модулей VBA и 301 ссылка на библиотеки из 114 книг с макросами
+src/Cellwright                    core: primitives, OPC, streaming, DOM, styles
+src/Cellwright.Formulas           formula engine: parser, evaluator, recalculation
+src/Cellwright.Pdf                PDF output on Inkwright: grid, pages, headers, AutoFit
+src/Cellwright.Xls                binary formats: CFB, BIFF8 (.xls), BIFF12 (.xlsb), Ptg formulas,
+                                  decryption, VBA extraction
+src/Cellwright.Mapping            mapping attributes + runtime
+src/Cellwright.Mapping.Generator  Roslyn incremental generator (packed into Mapping)
+tests/                            xUnit: 1835 tests (run twice, the second time under a culture
+                                  with a comma for the decimal separator), including the OpenXml
+                                  validator, interop with ClosedXML, a round trip of ~400 real xlsx
+                                  and xlsm files with no part lost, 844 real .xls and 66 .xlsb with
+                                  values, hyperlinks, document properties, pictures and theme
+                                  colours checked against ExcelDataReader and NPOI, a comparison of
+                                  64 workbooks the corpus holds in two formats at once, formula
+                                  recalculation across three formats against Excel's own values,
+                                  Excel's documented divergences from the standard per MS-OI29500,
+                                  and 595 VBA modules with 301 library references from 114 macro
+                                  workbooks
 benchmarks/                       BenchmarkDotNet vs EPPlus 8 / ClosedXML / ExcelDataReader
-samples/                          рабочие примеры всех слоёв
+samples/                          working examples of every layer
 ```
 
-Осознанные ограничения перечислены в [architecture.md](docs/architecture.md),
+The deliberate limitations are listed in [architecture.md](docs/architecture.md),
 [worksheet.md](docs/worksheet.md), [formulas.md](docs/formulas.md), [xls.md](docs/xls.md),
-[xlsb.md](docs/xlsb.md), [pictures.md](docs/pictures.md), [markdown.md](docs/markdown.md) и
-[vba.md](docs/vba.md): нет AutoFit, нет API для диаграмм и сводных таблиц (они только переносятся
-в сохранённый xlsx), нет spill у динамических массивов и нет `LAMBDA`; внешние книги считаются
-из кэша связи, но сам чужой файл не открывается; макросы
-только читаются, но не пишутся; шифрование пакета пишется, шифрование `.xls` — нет; `.xlsb`
-читается, но не пишется; бинарный `.xls` не переносит непонятые части и не пишет условное
-форматирование; картинки читаются везде, но пишутся только в xlsx; Markdown только пишется,
-обратно не читается.
+[xlsb.md](docs/xlsb.md), [pictures.md](docs/pictures.md), [markdown.md](docs/markdown.md) and
+[vba.md](docs/vba.md). In short: a loaded chart can be read and replaced but not edited, and pivot
+tables have no API at all — both travel into the saved xlsx untouched; there is no `LAMBDA` and no
+R1C1 input; an external workbook is computed from its link cache rather than by opening the file;
+macros are read but never written; package encryption is written but `.xls` encryption is not;
+`.xlsb` is read but not written; binary `.xls` does not preserve the parts it cannot model, and
+writes the conditional formatting rules the classic records can express but not the kinds that
+live in `CF12` records; Markdown is only written, never read back.

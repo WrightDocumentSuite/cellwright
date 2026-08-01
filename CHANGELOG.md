@@ -1,160 +1,161 @@
-# Журнал изменений
+# Changelog
 
-Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — по
-[семантическому версионированию](https://semver.org/lang/ru/).
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[semantic versioning](https://semver.org/).
 
-Пока мажорная версия нулевая, ломающие изменения возможны в минорных выпусках: публичная
-поверхность ещё не заморожена.
+While the major version is zero, breaking changes may land in minor releases: the public surface
+is not frozen yet.
 
 ## [0.1.2] — 2026-08-01
 
-Первый выпуск из публичного репозитория. Кода не касается, кроме зависимости PDF-пакета.
+The first release cut from the public repository. It touches no code beyond the PDF package's
+dependency.
 
-### Изменено
+### Changed
 
-- **Лицензия — Apache-2.0** вместо MIT: явная патентная оговорка и требования к уведомлениям,
-  чего у MIT нет. `Authors` — Pavel Deecalov.
-- **`Cellwright.Pdf` зависит от `Inkwright` как от пакета** (закреплено на `0.1.2`), а не от
-  исходников из соседнего приватного репозитория. Раньше публичная сборка была невозможна ни у
-  кого, кроме автора, и сообщение об ошибке отправляло за клоном туда, куда нет доступа.
-- **Все пять пакетов выпускаются вместе.** `Cellwright.Pdf` больше ничем не заблокирован.
-- Исходники переехали в <https://github.com/WrightDocumentSuite/cellwright>; CI больше не
-  выкачивает ничего извне.
+- **The licence is Apache-2.0** instead of MIT: an explicit patent grant and notice requirements,
+  neither of which MIT has. `Authors` is now Pavel Deecalov.
+- **`Cellwright.Pdf` depends on `Inkwright` as a package** (pinned to `0.1.2`) rather than on
+  sources from a neighbouring private repository. Building it publicly used to be impossible for
+  anyone but the author, and the error message sent people to clone a repository they could not
+  reach.
+- **All five packages ship together.** Nothing blocks `Cellwright.Pdf` any more.
+- The sources moved to <https://github.com/WrightDocumentSuite/cellwright>; CI no longer fetches
+  anything from outside the repository.
 
-### Снято с публикации
+### Unlisted
 
-- `Cellwright` 0.1.0 и 0.1.1 — выпущены под MIT и с адресом старого репозитория.
+- `Cellwright` 0.1.0 and 0.1.1 — released under MIT and naming the old repository.
 
 ## [0.1.1] — 2026-08-01
 
-Только метаданные пакета; код не менялся.
+Package metadata only; the code did not change.
 
-### Изменено
+### Changed
 
-- README внутри пакета — английский, отдельный от репозиторного, с абсолютными ссылками
-  (страница nuget.org не разрешает относительные).
-- Адрес репозитория в метаданных — <https://github.com/WrightDocumentSuite/cellwright>.
+- The readme inside the package is now a separate English document with absolute links (the
+  nuget.org page resolves no relative ones).
+- The repository address in the metadata is <https://github.com/WrightDocumentSuite/cellwright>.
 
 ## [0.1.0] — 2026-08-01
 
-Первый выпуск. На nuget.org опубликовано ядро — пакет `Cellwright`; остальные четыре собираются
-и проверяются, но ждут своей очереди (`Cellwright.Pdf` — публикации `Inkwright`, см.
+The first release. The core — the `Cellwright` package — went to nuget.org; the other four built
+and were verified but waited their turn (`Cellwright.Pdf` for `Inkwright` to be published, see
 [docs/releasing.md](docs/releasing.md)).
 
-### Добавлено
+### Added
 
 - **Threaded comments** (`Cellwright`): `ThreadedComment`, `Person`, `sheet.ThreadedComments`,
-  `book.People`. Ветки читаются, создаются и сохраняются, а не только переживают round-trip.
-  Заметки-заглушки для старых читателей генерируются из веток при сохранении — поэтому правка
-  обычных примечаний больше не отрывает ветки от ячеек, и предупреждение `ThreadedComments`
-  убрано за ненадобностью.
-- **Диаграммы** (`Cellwright` + `Cellwright.Pdf`): читаются (`sheet.Charts` — вид, заголовок,
-  серии со ссылками и кэшами точек; сырой `chartSpace` — источник правды, нетронутый пишется
-  байт-в-байт), создаются (`sheet.AddChart(ChartKind.Column, "D2:K17", "Данные!$B$2:$B$10", …)` —
-  колонки, полосы, линии, пирог, кольцо, область; кэши заполняются из живых ячеек, вывод
-  проходит официальный валидатор OOXML) и печатаются в PDF (оси с круглыми делениями, подписи
-  категорий, легенда, цвета из акцентов темы; диаграмма поперёк разрыва страницы сообщается
-  кодом `chart-split`, а не рисуется наполовину). Правка загруженной диаграммы по-прежнему
-  невозможна — только чтение, создание и удаление; листы-диаграммы проходят round-trip без
-  API. Регенерация рисунка листа больше не теряет диаграммы: они пишутся из модели вместе с
-  картинками.
-- **Spill динамических массивов** (`Cellwright.Formulas`): формула, вернувшая массив, занимает
-  свой прямоугольник; занятая ячейка, чужой разлив или объединение дают `#SPILL!` целиком.
-  Ссылки `A1#`, `Cell.SpillRange`/`Cell.IsSpilled`, запись в файл массивной формулой с
-  метаданными `XLDAPR` — Excel открывает её динамической, а перезагрузка не превращает разлив
-  в CSE. Запись в разлитую ячейку ломает разлив, как в Excel.
-- **Запись картинок в `.xls`** (`Cellwright.Xls`): изображения уходят в хранилище BSE с
-  дедупликацией по содержимому, фигуры — picture frame с якорями в долях ячейки. PNG, JPEG,
-  BMP (как DIB), EMF и WMF; GIF и TIFF сообщаются кодом `PictureFormatNotWritten`. Заметки и
-  картинки пишутся одним рисунком листа с общим блоком идентификаторов фигур.
-- **Запись условного форматирования в `.xls`** (`Cellwright.Xls`): классические записи
-  `CondFmt`/`CF` с блоком `DXFN`. Пишутся сравнения и правила-формулы; текстовые правила и
-  правила о пустых и ошибочных ячейках опускаются в равную им формулу — ту самую, которую Excel
-  сам кладёт в эти правила в xlsx. Шкалы, гистограммы, значки, ранги, среднее, дубликаты и
-  периоды дат живут в записях `CF12`, которых писатель не создаёт, и сообщаются кодом
-  `ConditionalFormatsNotWritten`; остальные правила листа при этом всё равно пишутся.
-- **Условное форматирование при печати в PDF** (`Cellwright.Pdf`): правила вычисляются, а не
-  игнорируются. Без движка формул обходятся сравнения с литералами, текстовые правила, пустые и
-  ошибочные, дубликаты и уникальные, ранги, среднее с отклонениями, все десять периодов дат,
-  цветовые шкалы, гистограммы и наборы значков. Правилам-выражениям нужен движок, который
-  передаётся через `PdfExportOptions.FormulaEvaluator`; без него правило попадает в диагностику
-  (`conditional-format-formula`), а не считается ложным. Общий отказ `conditional-format` заменён
-  узкими кодами.
-- **Форматированный текст в ячейке** (`Cellwright`): `RichText`, `RichTextRun`,
-  `cell.RichText` и `cell.SetRichText(...)`. Прогоны загруженного файла теперь читаются и
-  создаются из кода, а не только переживают round-trip. Прогон без шрифта следует шрифту
-  ячейки; замена значения снимает оформление вместе с текстом, к которому оно относилось.
+  `book.People`. Threads are read, created and saved rather than merely surviving a round trip.
+  The stub notes older readers rely on are regenerated from the threads on save — so editing
+  ordinary comments no longer detaches threads from their cells, and the `ThreadedComments`
+  warning has been removed for want of anything left to warn about.
+- **Charts** (`Cellwright` + `Cellwright.Pdf`): read (`sheet.Charts` — kind, title, series with
+  their references and cached points; the raw `chartSpace` is the source of truth and an untouched
+  chart is written back byte for byte), created
+  (`sheet.AddChart(ChartKind.Column, "D2:K17", "Data!$B$2:$B$10", …)` — column, bar, line, pie,
+  doughnut, area; caches filled from the live cells, and the output passes the official OOXML
+  validator) and printed to PDF (axes on round numbers, category labels, a legend, colours from
+  the theme accents; a chart across a page break is reported as `chart-split` rather than drawn in
+  half). Editing a loaded chart is still impossible — only reading, creating and removing; chart
+  sheets round-trip without an API. Regenerating a sheet's drawing no longer loses its charts:
+  they are written from the model alongside the pictures.
+- **Dynamic array spill** (`Cellwright.Formulas`): a formula returning an array occupies its
+  rectangle; an occupied cell, a foreign spill or a merge in the way yields `#SPILL!` in full.
+  `A1#` references, `Cell.SpillRange`/`Cell.IsSpilled`, and a file written as an array formula
+  with `XLDAPR` metadata — Excel opens it as dynamic, and a reload does not turn the spill into a
+  CSE relic. Writing into a spilled cell breaks the spill, as it does in Excel.
+- **Writing pictures to `.xls`** (`Cellwright.Xls`): images go into the BSE store, deduplicated by
+  content, and the shapes are picture frames anchored in fractions of a cell. PNG, JPEG, BMP (as a
+  DIB), EMF and WMF; GIF and TIFF are reported as `PictureFormatNotWritten`. Notes and pictures
+  are written as one sheet drawing sharing a single block of shape identifiers.
+- **Writing conditional formatting to `.xls`** (`Cellwright.Xls`): the classic `CondFmt`/`CF`
+  records with a `DXFN` block. Comparisons and formula rules are written; the text rules and the
+  ones about blank and error cells are lowered to the formula they are equal to — the very formula
+  Excel itself puts into those rules in xlsx. Colour scales, data bars, icon sets, ranks, averages,
+  duplicates and date periods live in `CF12` records the writer does not produce and are reported
+  as `ConditionalFormatsNotWritten`; the sheet's other rules are still written.
+- **Conditional formatting when printing to PDF** (`Cellwright.Pdf`): rules are worked out rather
+  than ignored. Comparisons against literals, text rules, blanks and errors, duplicates and
+  uniques, ranks, averages with deviations, all ten date periods, colour scales, data bars and
+  icon sets need no formula engine. Expression rules do, and it is handed over through
+  `PdfExportOptions.FormulaEvaluator`; without it such a rule is reported
+  (`conditional-format-formula`) rather than treated as false. The blanket `conditional-format`
+  refusal has been replaced by narrow codes.
+- **Rich text in a cell** (`Cellwright`): `RichText`, `RichTextRun`, `cell.RichText` and
+  `cell.SetRichText(...)`. The runs of a loaded file are now read and created from code, not only
+  carried through a round trip. A run with no font of its own follows the cell's font; replacing
+  the value drops the formatting along with the text it described.
 - **AutoFit** (`Cellwright.Pdf`): `sheet.AutoFit()`, `AutoFitColumns`, `AutoFitRows`,
-  `column.AutoFit()`, `book.AutoFit()` и `AutoFitOptions` с пределами, выборкой строк и
-  настройками измерения. Подгонка меряет тем же, чем меряет печать, поэтому подогнанная
-  колонка печатается, не обрезая текста. Ячейки с переносом, объединённые и скрытые строки
-  в подгонке ширины не участвуют — как в Excel.
+  `column.AutoFit()`, `book.AutoFit()` and `AutoFitOptions` with limits, row sampling and
+  measuring settings. Fitting measures with what printing measures, so a fitted column prints
+  without cutting its text. Wrapped cells, merged cells and hidden rows take no part in fitting a
+  width — as in Excel.
 
-### Состав по пакетам
+### What each package holds
 
-Ниже — состав первого выпуска, а не изменения: сравнивать не с чем.
+Below is the make-up of the first release rather than a list of changes: there is nothing to
+compare it against.
 
 #### Cellwright
 
-Ядро: примитивы, стриминг, DOM.
+The core: primitives, streaming, DOM.
 
-- `CellValue` — 24-байтный tagged union без боксинга; даты с тиковой точностью, серийные даты
-  обеих эпох с учётом бага 1900 года.
-- Стриминг с константной памятью: `XlsxWriter` (forward-only, UTF-8 напрямую) и `XlsxReader`
-  (`IAsyncEnumerable<RowData>`).
-- DOM `Workbook`/`Worksheet` с колоночными слайсами страницами по 512 строк — ни одного объекта
-  на ячейку.
-- Полнота листа: скрытые строки и столбцы, группировка, автофильтр, гиперссылки, примечания,
-  таблицы Excel, проверка данных, условное форматирование, настройки печати, защита листа и
-  книги, цвет ярлыка, масштаб, свойства документа.
-- Структурная правка: вставка и удаление строк и столбцов со сдвигом всего привязанного и
-  перенацеливанием формул всей книги; перестановка и копирование листов.
-- Стили: immutable records с интернированием, fluent-строители на extension members, весь
-  §18.8 — узорные и градиентные заливки, диагонали, поворот текста, цвета темы, защита ячеек.
-- Правка чужих файлов без потерь: диаграммы, сводные таблицы, картинки, темы и макросы `.xlsm`
-  переносятся в сохранённый файл как есть.
-- Экспорт в Markdown: `book.ToMarkdown()` и `ExportMarkdownAsync`.
-- Диагностика вместо тихих отказов: `WorkbookWarning` с кодами, `LoadDiagnostics`,
-  recovery-ориентированная загрузка; `LoadOptions.Limits` против zip-бомб.
+- `CellValue` — a 24-byte tagged union with no boxing; dates at tick precision, serial dates of
+  both epochs with the 1900 bug accounted for.
+- Constant-memory streaming: `XlsxWriter` (forward-only, UTF-8 straight to the wire) and
+  `XlsxReader` (`IAsyncEnumerable<RowData>`).
+- A `Workbook`/`Worksheet` DOM with column slices in 512-row pages — not one object per cell.
+- A complete worksheet: hidden rows and columns, grouping, auto-filter, hyperlinks, notes, Excel
+  tables, data validation, conditional formatting, page setup, sheet and workbook protection, tab
+  colour, zoom, document properties.
+- Structural editing: inserting and deleting rows and columns, moving everything anchored to them
+  and retargeting the whole workbook's formulas; reordering and copying sheets.
+- Styles: immutable records with interning, fluent builders on extension members, all of §18.8 —
+  pattern and gradient fills, diagonals, text rotation, theme colours, cell protection.
+- Lossless editing of foreign files: charts, pivot tables, pictures, themes and `.xlsm` macros
+  travel into the saved file as they were.
+- Markdown export: `book.ToMarkdown()` and `ExportMarkdownAsync`.
+- Diagnostics instead of silent failure: `WorkbookWarning` with codes, `LoadDiagnostics`,
+  recovery-oriented loading; `LoadOptions.Limits` against zip bombs.
 
 #### Cellwright.Formulas
 
-- 447 функций, из них 352 из 356 по §18.17.7 ISO/IEC 29500 (без четырёх японо-тайских).
-- Инкрементальный пересчёт по графу зависимостей, детекция циклов, разворачивание
-  shared-формул.
-- Defined names, структурные ссылки `Таблица[Колонка]`, 3-D диапазоны `Q1:Q4!A1`, ссылки в
-  закрытые книги из кэша `externalLink`, `LET` и `TEXT`.
+- 447 functions, 352 of the 356 in §18.17.7 of ISO/IEC 29500 (all but four Japanese and Thai ones).
+- Incremental recalculation over a dependency graph, cycle detection, shared-formula expansion.
+- Defined names, structured references `Table[Column]`, 3-D ranges `Q1:Q4!A1`, references into
+  closed workbooks from the `externalLink` cache, `LET` and `TEXT`.
 
 #### Cellwright.Mapping
 
-- `[ExcelRow]` + incremental source generator → `IRowSchema<T>` на static abstract members.
-- Ноль рефлексии, Native AOT.
+- `[ExcelRow]` + an incremental source generator → `IRowSchema<T>` on static abstract members.
+- Zero reflection, Native AOT.
 
 #### Cellwright.Xls
 
-- Чтение `.xls` (BIFF8, BIFF5, BIFF2–4) и `.xlsb` (BIFF12) в тот же `Workbook`.
-- Запись BIFF8: значения, стили, примечания через слой Office Art, проверки данных, настройки
-  печати, гиперссылки, кодирование формул Ptg.
-- Расшифровка XOR/RC4/RC4 CryptoAPI и обеих схем MS-OFFCRYPTO; запись зашифрованного пакета
-  через `SaveEncryptedAsync` под agile AES-256/SHA-512.
-- Извлечение исходников VBA из `.xlsm` и `.xls` (распаковка MS-OVBA).
+- Reading `.xls` (BIFF8, BIFF5, BIFF2–4) and `.xlsb` (BIFF12) into the same `Workbook`.
+- Writing BIFF8: values, styles, notes through the Office Art layer, data validation, page setup,
+  hyperlinks, Ptg formula encoding.
+- Decrypting XOR/RC4/RC4 CryptoAPI and both MS-OFFCRYPTO schemes; writing an encrypted package
+  through `SaveEncryptedAsync` under agile AES-256/SHA-512.
+- Extracting VBA sources from `.xlsm` and `.xls` (MS-OVBA decompression).
 
-#### Известные ограничения
+#### Known limitations
 
-Каждое отступление от спецификации объявлено в документации, а не умолчано. Основное на момент
-выпуска:
+Every deviation from the specification is declared in the documentation rather than passed over in
+silence. The main ones as of this release:
 
-- Записи `.xlsb` нет — сохранять в xlsx или `.xls`.
-- Условное форматирование в `.xls` пишется, кроме видов, живущих в записях `CF12` (шкалы,
-  гистограммы, значки, ранги, среднее, дубликаты, периоды дат).
-- Голая ссылка-диапазон (`=A1:A3`) сворачивается неявным пересечением, а не разливается;
-  прямоугольники разлива известны только после `Calculate()`.
-- Сводные таблицы переживают загрузку-сохранение, но API для них нет; загруженную диаграмму
-  можно прочитать и удалить, но не править.
-- Фонетические подсказки (`rPh`, `phoneticPr`) переживают round-trip, но моделью не
-  представлены и после переписывания прогонов не восстанавливаются.
+- There is no `.xlsb` writer — save to xlsx or `.xls`.
+- Conditional formatting is written to `.xls` except for the kinds that live in `CF12` records
+  (colour scales, data bars, icon sets, ranks, averages, duplicates, date periods).
+- A bare range reference (`=A1:A3`) collapses by implicit intersection rather than spilling; spill
+  rectangles are known only after `Calculate()`.
+- Pivot tables survive load and save but have no API; a loaded chart can be read and removed, but
+  not edited.
+- Phonetic hints (`rPh`, `phoneticPr`) survive a round trip but are not modelled, and are not
+  restored once a cell's runs are rewritten.
 
-Полные списки — в [docs/](docs/).
+The full lists are in [docs/](docs/).
 
 [0.1.2]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.2
 [0.1.1]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.1
