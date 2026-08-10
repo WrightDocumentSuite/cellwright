@@ -20,7 +20,13 @@ internal static class LegacySheetReader
 {
     /// <summary>Reads the single sheet of a pre-BIFF5 file into the workbook.</summary>
     public static void Read(
-        Workbook workbook, BiffReader reader, BiffVersion version, XlsLoadOptions options, Action<WorkbookWarning> warn)
+        Workbook workbook,
+        BiffReader reader,
+        BiffVersion version,
+        XlsLoadOptions options,
+        Action<WorkbookWarning> warn,
+        DocumentLoadBudgetState loadBudget,
+        CancellationToken cancellationToken)
     {
         string generation = version switch
         {
@@ -41,7 +47,14 @@ internal static class LegacySheetReader
             Encoding = ResolveFallback(options.FallbackCodePage),
         };
 
-        var sink = new WorksheetContentSink(sheet, styleMap: [], relationships: [], preserveMarkup: false, warn);
+        var sink = new WorksheetContentSink(
+            sheet,
+            styleMap: [],
+            relationships: [],
+            preserveMarkup: false,
+            warn,
+            loadBudget,
+            accountText: true);
         var formats = new Dictionary<int, string>();
         var fonts = new List<XlsFontRecord>();
         var cellFormats = new List<XlsXfRecord>();
@@ -51,6 +64,7 @@ internal static class LegacySheetReader
 
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             ReadOnlySpan<byte> body = reader.Record.Span;
             switch (reader.RecordType)
             {

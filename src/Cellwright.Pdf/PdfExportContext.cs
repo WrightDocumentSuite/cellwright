@@ -63,6 +63,9 @@ internal sealed class PdfExportContext : IDisposable
     /// <summary>What had to be worked around.</summary>
     public PdfExportDiagnostics Diagnostics { get; } = new();
 
+    /// <summary>Comment metadata losses accumulated across all selected sheets.</summary>
+    internal PdfCommentLosses CommentLosses { get; } = new();
+
     /// <summary>The culture number formats are rendered in.</summary>
     public CultureInfo Culture => Options.Culture;
 

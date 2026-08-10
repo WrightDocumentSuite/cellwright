@@ -16,6 +16,12 @@ namespace Cellwright.Xls.Crypto;
 /// </summary>
 internal static class AgileEncryption
 {
+    /// <summary>
+    /// Largest Agile EncryptionInfo XML descriptor. Real password and certificate descriptors
+    /// are tiny; this bound prevents XmlReader from first materializing a hostile huge attribute.
+    /// </summary>
+    internal const int MaxDescriptorBytes = 1 * 1024 * 1024;
+
     /// <summary>Segment size the specification fixes for the encrypted package (MS-OFFCRYPTO 2.3.4.15).</summary>
     private const int SegmentSize = 4096;
 
@@ -27,6 +33,13 @@ internal static class AgileEncryption
 
     /// <summary>Rounds the password is stretched by when writing; the maximum Office uses.</summary>
     private const int SpinCount = 100_000;
+
+    /// <summary>
+    /// Largest encoded salt, verifier, key or HMAC value accepted in EncryptionInfo. Real values
+    /// are at most a few hundred characters; this leaves ample extension room while preventing a
+    /// hostile XML attribute from causing another proportional decoded-buffer allocation.
+    /// </summary>
+    private const int MaxEncodedCryptoValueCharacters = 4 * 1024;
 
     // Block keys that separate the purposes the one key is used for (2.3.4.13 and 2.3.4.14).
     private static ReadOnlySpan<byte> VerifierInputBlock => [0xFE, 0xA7, 0xD2, 0x76, 0x3B, 0x4B, 0x9E, 0x79];
@@ -47,19 +60,24 @@ internal static class AgileEncryption
     /// <param name="encryptedPackage">Content of the <c>EncryptedPackage</c> stream.</param>
     /// <param name="passwords">Passwords to try, in order.</param>
     /// <param name="warn">Reports a package whose integrity check does not hold.</param>
+    /// <param name="cancellationToken">Cancels password stretching and package decryption.</param>
+    /// <param name="loadBudget">Shared XML and expansion counters of the outer document.</param>
     /// <exception cref="XlsFormatException">The descriptor describes something unreadable.</exception>
     public static byte[]? Decrypt(
         ReadOnlySpan<byte> descriptor, byte[] encryptedPackage, IEnumerable<string> passwords,
-        Action<WorkbookWarning>? warn = null)
+        Action<WorkbookWarning>? warn = null,
+        CancellationToken cancellationToken = default,
+        DocumentLoadBudgetState? loadBudget = null)
     {
-        Descriptor parsed = Parse(descriptor);
+        Descriptor parsed = Parse(descriptor, loadBudget, cancellationToken);
         foreach (string password in passwords)
         {
-            if (TryUnlock(parsed, password) is not { } secretKey)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (TryUnlock(parsed, password, cancellationToken) is not { } secretKey)
                 continue;
 
             VerifyIntegrity(parsed, secretKey, encryptedPackage, warn);
-            return PackageBytes(parsed.KeyData, secretKey, encryptedPackage);
+            return PackageBytes(parsed.KeyData, secretKey, encryptedPackage, cancellationToken);
         }
 
         return null;
@@ -245,10 +263,16 @@ internal static class AgileEncryption
     /// password is not the one. The password never encrypts the content itself: it unlocks a
     /// random key, which is what lets one file be opened by several credentials.
     /// </summary>
-    private static byte[]? TryUnlock(Descriptor descriptor, string password)
+    private static byte[]? TryUnlock(
+        Descriptor descriptor,
+        string password,
+        CancellationToken cancellationToken)
     {
         Cipher key = descriptor.PasswordKey;
-        byte[] stretched = key.Hash.Spin(key.Hash.Of(key.Salt, Encoding.Unicode.GetBytes(password)), descriptor.SpinCount);
+        byte[] stretched = key.Hash.Spin(
+            key.Hash.Of(key.Salt, Encoding.Unicode.GetBytes(password)),
+            descriptor.SpinCount,
+            cancellationToken);
 
         // Every operation of the password key encryptor takes the salt itself as its
         // initialization vector, cut or padded to the cipher's block (2.3.4.12 case 2).
@@ -333,7 +357,11 @@ internal static class AgileEncryption
         Fit(cipher.Hash.Of(cipher.Salt, blockKey), cipher.BlockBytes);
 
     /// <summary>Decrypts the package segment by segment, then cuts it to the length it declares.</summary>
-    private static byte[] PackageBytes(Cipher keyData, byte[] secretKey, byte[] encryptedPackage)
+    private static byte[] PackageBytes(
+        Cipher keyData,
+        byte[] secretKey,
+        byte[] encryptedPackage,
+        CancellationToken cancellationToken)
     {
         if (encryptedPackage.Length < 8)
             throw new XlsFormatException("The encrypted package stream is too short to hold its own length.");
@@ -348,6 +376,7 @@ internal static class AgileEncryption
         Span<byte> segment = stackalloc byte[SegmentSize + Cipher.MaxBlockBytes];
         for (int offset = 0, index = 0; offset < available; offset += SegmentSize, index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int length = Math.Min(SegmentSize, available - offset);
 
             // A trailing segment shorter than the cipher block is padded rather than skipped:
@@ -459,8 +488,18 @@ internal static class AgileEncryption
         }
     }
 
-    private static Descriptor Parse(ReadOnlySpan<byte> descriptor)
+    private static Descriptor Parse(
+        ReadOnlySpan<byte> descriptor,
+        DocumentLoadBudgetState? loadBudget,
+        CancellationToken cancellationToken)
     {
+        if (descriptor.Length > MaxDescriptorBytes)
+        {
+            throw new XlsFormatException(
+                $"The agile encryption descriptor has {descriptor.Length} bytes; " +
+                $"EncryptionInfo metadata is limited to {MaxDescriptorBytes}.");
+        }
+
         Cipher? keyData = null;
         Cipher? passwordKey = null;
         int spinCount = 0;
@@ -471,33 +510,53 @@ internal static class AgileEncryption
         byte[]? hmacValue = null;
 
         using var stream = new MemoryStream(descriptor.ToArray(), writable: false);
-        using XmlReader xml = XmlReader.Create(stream, XmlDefaults.ReaderSettings);
-        while (xml.Read())
+        XmlReaderSettings settings = loadBudget is null
+            ? XmlDefaults.ReaderSettings
+            : XmlDefaults.ForBudget(loadBudget.Budget, async: false);
+        using XmlReader xml = XmlReader.Create(stream, settings);
+        try
         {
-            if (xml.NodeType != XmlNodeType.Element)
-                continue;
-
-            switch (xml.LocalName)
+            while (xml.Read())
             {
-                case "keyData":
-                    keyData = ReadCipher(xml);
-                    break;
+                cancellationToken.ThrowIfCancellationRequested();
+                loadBudget?.AddXmlNode(xml.Depth + 1);
+                if (xml.NodeType != XmlNodeType.Element)
+                    continue;
 
-                case "dataIntegrity":
-                    hmacKey = ReadBase64(xml, "encryptedHmacKey");
-                    hmacValue = ReadBase64(xml, "encryptedHmacValue");
-                    break;
+                switch (xml.LocalName)
+                {
+                    case "keyData":
+                        keyData = ReadCipher(xml);
+                        break;
 
-                // The password encryptor is one of possibly several; the others unlock the same
-                // file with a certificate, which is not a credential this library can supply.
-                case "encryptedKey":
-                    passwordKey = ReadCipher(xml);
-                    spinCount = ReadInt(xml, "spinCount");
-                    verifierInput = ReadBase64(xml, "encryptedVerifierHashInput");
-                    verifierValue = ReadBase64(xml, "encryptedVerifierHashValue");
-                    encryptedKey = ReadBase64(xml, "encryptedKeyValue");
-                    break;
+                    case "dataIntegrity":
+                        hmacKey = ReadBase64(xml, "encryptedHmacKey");
+                        hmacValue = ReadBase64(xml, "encryptedHmacValue");
+                        break;
+
+                    // The password encryptor is one of possibly several; the others unlock the same
+                    // file with a certificate, which is not a credential this library can supply.
+                    case "encryptedKey":
+                        passwordKey = ReadCipher(xml);
+                        spinCount = ReadInt(xml, "spinCount");
+                        verifierInput = ReadBase64(xml, "encryptedVerifierHashInput");
+                        verifierValue = ReadBase64(xml, "encryptedVerifierHashValue");
+                        encryptedKey = ReadBase64(xml, "encryptedKeyValue");
+                        break;
+                }
             }
+        }
+        catch (XmlException exception) when (
+            loadBudget is not null &&
+            exception.Message.Contains(
+                nameof(XmlReaderSettings.MaxCharactersInDocument),
+                StringComparison.Ordinal))
+        {
+            long limit = loadBudget.Budget.MaxXmlCharactersPerPart;
+            throw new DocumentLoadLimitException(
+                nameof(DocumentLoadBudget.MaxXmlCharactersPerPart),
+                limit,
+                limit == long.MaxValue ? long.MaxValue : limit + 1);
         }
 
         if (keyData is not { } data || passwordKey is not { } password)
@@ -591,6 +650,13 @@ internal static class AgileEncryption
     {
         if (xml.GetAttribute(attribute) is not { Length: > 0 } text)
             return null;
+
+        if (text.Length > MaxEncodedCryptoValueCharacters)
+        {
+            throw new XlsFormatException(
+                $"The encryption descriptor's '{attribute}' value has {text.Length} encoded characters; " +
+                $"cryptographic metadata is limited to {MaxEncodedCryptoValueCharacters}.");
+        }
 
         var buffer = new byte[(text.Length / 4 * 3) + 3];
         return Convert.TryFromBase64String(text, buffer, out int written) ? buffer[..written] : null;

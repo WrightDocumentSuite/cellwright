@@ -21,8 +21,11 @@ internal sealed class CachedRange(RangeKey key, ArrayValue array)
 
     public ArrayValue Array { get; } = array;
 
-    /// <summary>Access counter used to pick a victim when the cache runs over budget.</summary>
-    public long LastUsed { get; set; }
+    /// <summary>Position in the cache-wide LRU chain, oldest first.</summary>
+    public LinkedListNode<CachedRange>? LruNode { get; set; }
+
+    /// <summary>Position in the owning sheet's invalidation chain.</summary>
+    public LinkedListNode<CachedRange>? SheetNode { get; set; }
 
     /// <summary>
     /// Whether the cache holds on to this range. A transient copy is not worth indexing: the
@@ -69,9 +72,16 @@ internal sealed class RangeCache
     /// </summary>
     public const long MaxCells = 2_000_000;
 
+    private readonly long _maxCells;
     private readonly Dictionary<RangeKey, CachedRange> _entries = [];
     private readonly Dictionary<int, SheetEntries> _bySheet = [];
-    private long _clock;
+    private readonly LinkedList<CachedRange> _lru = [];
+
+    public RangeCache(long maxCells = MaxCells)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxCells);
+        _maxCells = maxCells;
+    }
 
     /// <summary>Number of reads served from the cache.</summary>
     public int Hits { get; private set; }
@@ -90,7 +100,7 @@ internal sealed class RangeCache
     {
         if (_entries.TryGetValue(key, out CachedRange? found))
         {
-            found.LastUsed = ++_clock;
+            Touch(found);
             Hits++;
             entry = found;
             return true;
@@ -105,19 +115,23 @@ internal sealed class RangeCache
     public void Add(CachedRange entry)
     {
         long cells = entry.Array.Count;
-        if (cells > MaxCells)
+        if (cells > _maxCells)
             return;
 
-        entry.LastUsed = ++_clock;
+        if (_entries.TryGetValue(entry.Key, out CachedRange? previous))
+            Remove(previous);
+
         entry.IsRetained = true;
-        _entries[entry.Key] = entry;
+        _entries.Add(entry.Key, entry);
         RetainedCells += cells;
 
+        entry.LruNode = _lru.AddLast(entry);
+
         SheetEntries sheet = GetSheet(entry.Key.SheetId);
-        sheet.Ranges.Add(entry);
+        entry.SheetNode = sheet.Ranges.AddLast(entry);
         sheet.Include(entry.Key);
 
-        while (RetainedCells > MaxCells)
+        while (RetainedCells > _maxCells)
         {
             if (!TryEvictLeastRecentlyUsed())
                 break;
@@ -135,27 +149,31 @@ internal sealed class RangeCache
         if (!entries.MayContain(row, column))
             return;
 
-        bool removed = false;
-        for (int i = entries.Ranges.Count - 1; i >= 0; i--)
+        LinkedListNode<CachedRange>? node = entries.Ranges.First;
+        while (node is not null)
         {
-            CachedRange entry = entries.Ranges[i];
-            if (!entry.Key.Contains(row, column))
-                continue;
+            LinkedListNode<CachedRange>? next = node.Next;
+            CachedRange entry = node.Value;
+            if (entry.Key.Contains(row, column))
+                Remove(entry);
 
-            entries.Ranges.RemoveAt(i);
-            Remove(entry);
-            removed = true;
+            node = next;
         }
-
-        if (removed)
-            entries.RecomputeBounds();
     }
 
     /// <summary>Drops everything; used when the workbook structure changes under the engine.</summary>
     public void Clear()
     {
+        foreach (CachedRange entry in _entries.Values)
+        {
+            entry.LruNode = null;
+            entry.SheetNode = null;
+            entry.IsRetained = false;
+        }
+
         _entries.Clear();
         _bySheet.Clear();
+        _lru.Clear();
         RetainedCells = 0;
     }
 
@@ -168,30 +186,49 @@ internal sealed class RangeCache
 
     private bool TryEvictLeastRecentlyUsed()
     {
-        CachedRange? victim = null;
-        foreach (CachedRange entry in _entries.Values)
-        {
-            if (victim is null || entry.LastUsed < victim.LastUsed)
-                victim = entry;
-        }
-
-        if (victim is null)
+        LinkedListNode<CachedRange>? oldest = _lru.First;
+        if (oldest is null)
             return false;
 
-        if (_bySheet.TryGetValue(victim.Key.SheetId, out SheetEntries? entries))
-        {
-            entries.Ranges.Remove(victim);
-            entries.RecomputeBounds();
-        }
-
-        Remove(victim);
+        Remove(oldest.Value);
         return true;
     }
 
     private void Remove(CachedRange entry)
     {
-        if (_entries.Remove(entry.Key))
-            RetainedCells -= entry.Array.Count;
+        if (!_entries.TryGetValue(entry.Key, out CachedRange? retained) ||
+            !ReferenceEquals(retained, entry))
+        {
+            return;
+        }
+
+        _entries.Remove(entry.Key);
+        RetainedCells -= entry.Array.Count;
+
+        if (entry.LruNode is not null)
+            _lru.Remove(entry.LruNode);
+
+        if (entry.SheetNode is not null &&
+            _bySheet.TryGetValue(entry.Key.SheetId, out SheetEntries? sheet))
+        {
+            sheet.Ranges.Remove(entry.SheetNode);
+            if (sheet.Ranges.Count == 0)
+                _bySheet.Remove(entry.Key.SheetId);
+        }
+
+        entry.LruNode = null;
+        entry.SheetNode = null;
+        entry.IsRetained = false;
+    }
+
+    private void Touch(CachedRange entry)
+    {
+        LinkedListNode<CachedRange> node = entry.LruNode!;
+        if (!ReferenceEquals(node, _lru.Last))
+        {
+            _lru.Remove(node);
+            _lru.AddLast(node);
+        }
     }
 
     private SheetEntries GetSheet(int sheetId)
@@ -209,7 +246,7 @@ internal sealed class RangeCache
         private int _lastRow = int.MinValue;
         private int _lastColumn = int.MinValue;
 
-        public List<CachedRange> Ranges { get; } = [];
+        public LinkedList<CachedRange> Ranges { get; } = [];
 
         public bool MayContain(int row, int column) =>
             row >= _firstRow && row <= _lastRow && column >= _firstColumn && column <= _lastColumn;
@@ -222,14 +259,5 @@ internal sealed class RangeCache
             _lastColumn = Math.Max(_lastColumn, key.LastColumn);
         }
 
-        public void RecomputeBounds()
-        {
-            _firstRow = int.MaxValue;
-            _firstColumn = int.MaxValue;
-            _lastRow = int.MinValue;
-            _lastColumn = int.MinValue;
-            foreach (CachedRange entry in Ranges)
-                Include(entry.Key);
-        }
     }
 }

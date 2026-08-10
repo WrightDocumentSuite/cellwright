@@ -79,6 +79,47 @@ internal sealed class SheetGrid<T>
     }
 
     /// <summary>
+    /// Walks the occupied slots inside a rectangle in column-major order. Columns and 512-row
+    /// pages outside the rectangle are not visited, so a whole-column range over a sparse sheet
+    /// costs the populated pages rather than all 1,048,576 possible rows.
+    /// </summary>
+    public IEnumerable<(int Row, int Column, T Value)> EnumerateOccupied(RangeRef range)
+    {
+        var comparer = EqualityComparer<T>.Default;
+        int lastColumn = Math.Min(range.End.Column, _columns.Length);
+
+        for (int column = range.Start.Column; column <= lastColumn; column++)
+        {
+            if (_columns[column - 1] is not { } store)
+                continue;
+
+            foreach ((int row, T value) in store.Enumerate(range.Start.Row, range.End.Row))
+            {
+                if (!comparer.Equals(value, default!))
+                    yield return (row, column, value);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether any slot in a rectangle differs from <c>default</c>. The search stops at the first
+    /// occupied slot and skips columns and pages that cannot meet the rectangle.
+    /// </summary>
+    public bool AnyOccupied(RangeRef range)
+    {
+        var comparer = EqualityComparer<T>.Default;
+        int lastColumn = Math.Min(range.End.Column, _columns.Length);
+
+        for (int column = range.Start.Column; column <= lastColumn; column++)
+        {
+            if (_columns[column - 1]?.AnyOccupied(range.Start.Row, range.End.Row, comparer) == true)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Moves rows to make room for <paramref name="count"/> new ones at <paramref name="index"/>,
     /// or closes the gap left by deleting that many. Cells pushed past the last row of the grid
     /// are dropped, the way Excel drops them once it has warned about it.
@@ -232,6 +273,45 @@ internal sealed class SheetGrid<T>
                 for (int slot = 0; slot < page.Length; slot++)
                     yield return ((pageIndex << PageBits) + slot + 1, page[slot]);
             }
+        }
+
+        public IEnumerable<(int Row, T Value)> Enumerate(int firstRow, int lastRow)
+        {
+            int firstPage = (firstRow - 1) >> PageBits;
+            int lastPage = Math.Min((lastRow - 1) >> PageBits, _pages.Length - 1);
+
+            for (int pageIndex = firstPage; pageIndex <= lastPage; pageIndex++)
+            {
+                if (_pages[pageIndex] is not { } page)
+                    continue;
+
+                int firstSlot = pageIndex == firstPage ? (firstRow - 1) & PageMask : 0;
+                int lastSlot = pageIndex == lastPage ? (lastRow - 1) & PageMask : PageMask;
+                for (int slot = firstSlot; slot <= lastSlot; slot++)
+                    yield return ((pageIndex << PageBits) + slot + 1, page[slot]);
+            }
+        }
+
+        public bool AnyOccupied(int firstRow, int lastRow, EqualityComparer<T> comparer)
+        {
+            int firstPage = (firstRow - 1) >> PageBits;
+            int lastPage = Math.Min((lastRow - 1) >> PageBits, _pages.Length - 1);
+
+            for (int pageIndex = firstPage; pageIndex <= lastPage; pageIndex++)
+            {
+                if (_pages[pageIndex] is not { } page)
+                    continue;
+
+                int firstSlot = pageIndex == firstPage ? (firstRow - 1) & PageMask : 0;
+                int lastSlot = pageIndex == lastPage ? (lastRow - 1) & PageMask : PageMask;
+                for (int slot = firstSlot; slot <= lastSlot; slot++)
+                {
+                    if (!comparer.Equals(page[slot], default!))
+                        return true;
+                }
+            }
+
+            return false;
         }
     }
 }

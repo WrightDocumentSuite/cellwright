@@ -20,7 +20,7 @@
   <PropertyGroup Label="Package metadata defaults">
     <Authors>Pavel Deecalov</Authors>
     <Product>Cellwright</Product>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/WrightDocumentSuite/cellwright</PackageProjectUrl>
     <RepositoryUrl>https://github.com/WrightDocumentSuite/cellwright.git</RepositoryUrl>

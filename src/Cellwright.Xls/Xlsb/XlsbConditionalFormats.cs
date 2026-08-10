@@ -30,10 +30,14 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
     // child records, and only BrtEndCFRule tells whether enough of it showed up.
     private ConditionalFormatType? _pendingKind;
     private int _pendingPriority;
+    private string? _pendingActivityFormula;
     private readonly List<ConditionalValue> _stops = [];
     private readonly List<ExcelColor> _colors = [];
     private bool _collecting;
+    private bool _pendingInvalid;
     private bool _barShowValue;
+    private int _barMinimumLength = 10;
+    private int _barMaximumLength = 90;
     private int _iconSetId;
     private bool _iconOnly;
     private bool _iconReverse;
@@ -58,6 +62,13 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
         int parameter = (int)BinaryPrimitives.ReadUInt32LittleEndian(body[16..]);
         uint flags = BinaryPrimitives.ReadUInt32LittleEndian(body[28..]);
 
+        int offset = RuleHeader;
+        string? text = Biff12Values.ReadNullableString(body, ref offset);
+        string? first = ReadFormula(body, ref offset, BinaryPrimitives.ReadUInt32LittleEndian(body[32..]));
+        string? second = ReadFormula(body, ref offset, BinaryPrimitives.ReadUInt32LittleEndian(body[36..]));
+        uint thirdPresent = BinaryPrimitives.ReadUInt32LittleEndian(body[40..]);
+        string? third = ReadFormula(body, ref offset, thirdPresent);
+
         // The graded kinds (CFType 3, 4 and 6) describe themselves in the records that follow.
         ConditionalFormatType? graded = type switch
         {
@@ -68,15 +79,20 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
         };
         if (graded is { } gradedKind)
         {
+            if (thirdPresent != 0 && third is null)
+            {
+                _unmodelled++;
+                return;
+            }
+
             _pendingKind = gradedKind;
             _pendingPriority = priority > 0 ? priority : 0;
+            _pendingActivityFormula = third;
+            _pendingInvalid = false;
+            // fStopTrue MUST be zero for graded rules. Do not propagate a malformed producer's
+            // bit into the model, where it would change the evaluation of lower-priority rules.
             return;
         }
-
-        int offset = RuleHeader;
-        string? text = Biff12Values.ReadNullableString(body, ref offset);
-        string? first = ReadFormula(body, ref offset, BinaryPrimitives.ReadUInt32LittleEndian(body[32..]));
-        string? second = ReadFormula(body, ref offset, BinaryPrimitives.ReadUInt32LittleEndian(body[36..]));
 
         if (Classify(type, template) is not { } kind)
         {
@@ -114,7 +130,21 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
     public void BeginDataBar(ReadOnlySpan<byte> body)
     {
         _collecting = _pendingKind == ConditionalFormatType.DataBar;
-        _barShowValue = body.Length < 3 || body[2] != 0;
+        if (!_collecting || body.Length < 3)
+        {
+            _collecting = false;
+            _pendingInvalid = true;
+            return;
+        }
+
+        _barMinimumLength = body[0];
+        _barMaximumLength = body[1];
+        _barShowValue = body[2] != 0;
+        if (_barMinimumLength > _barMaximumLength || _barMaximumLength > 100)
+        {
+            _collecting = false;
+            _pendingInvalid = true;
+        }
     }
 
     /// <summary>Opens the icon set block: the set number and the display bits (2.4.91).</summary>
@@ -122,12 +152,18 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
     {
         _collecting = _pendingKind == ConditionalFormatType.IconSet;
         if (body.Length < 6)
+        {
+            _pendingInvalid = true;
             return;
+        }
 
         _iconSetId = BinaryPrimitives.ReadInt32LittleEndian(body);
         int bits = BinaryPrimitives.ReadUInt16LittleEndian(body[4..]);
         _iconOnly = (bits & 0x02) != 0;
-        _iconReverse = (bits & 0x04) != 0;
+        // BrtBeginIconSet spells this flag backwards: zero means reversed order, while
+        // one means the icon set's defined order. The model and OOXML both use the direct
+        // meaning, so invert the wire bit here.
+        _iconReverse = (bits & 0x04) == 0;
     }
 
     /// <summary>
@@ -136,34 +172,125 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
     /// </summary>
     public void ReadValueObject(ReadOnlySpan<byte> body)
     {
-        if (!_collecting || body.Length < 24)
+        if (!_collecting)
             return;
+        if (body.Length < 24)
+        {
+            _pendingInvalid = true;
+            return;
+        }
 
         int type = BinaryPrimitives.ReadInt32LittleEndian(body);
-        double number = BinaryPrimitives.ReadDoubleLittleEndian(body[4..]);
-        int formulaLength = BinaryPrimitives.ReadInt32LittleEndian(body[20..]);
-
-        ConditionalValue stop = type switch
+        if (type is not (1 or 2 or 3 or 4 or 5 or 7))
         {
-            2 => ConditionalValue.Minimum,
-            3 => ConditionalValue.Maximum,
-            7 => new ConditionalValue(
-                ConditionalValueType.Formula,
-                formulaLength > 0 && 24 + formulaLength <= body.Length
-                    ? decoder.Decode(body.Slice(24, formulaLength), _ranges[0].Start, sheetIndex: 0)
-                    : null),
-            4 => ConditionalValue.Percent(number),
-            5 => ConditionalValue.Percentile(number),
+            _pendingInvalid = true;
+            return;
+        }
+
+        double number = BinaryPrimitives.ReadDoubleLittleEndian(body[4..]);
+        bool isIcon = _pendingKind == ConditionalFormatType.IconSet;
+        uint saveGreaterThanOrEqual = BinaryPrimitives.ReadUInt32LittleEndian(body[12..]);
+        uint greaterThanOrEqualFlag = BinaryPrimitives.ReadUInt32LittleEndian(body[16..]);
+        if (isIcon && (saveGreaterThanOrEqual != 1 || greaterThanOrEqualFlag > 1))
+        {
+            _pendingInvalid = true;
+            return;
+        }
+
+        bool greaterThanOrEqual = !isIcon || greaterThanOrEqualFlag != 0;
+        uint formulaLength = BinaryPrimitives.ReadUInt32LittleEndian(body[20..]);
+
+        if (type is 2 or 3)
+        {
+            if (isIcon)
+            {
+                _pendingInvalid = true;
+                return;
+            }
+
+            ConditionalValue boundary = type == 2 ? ConditionalValue.Minimum : ConditionalValue.Maximum;
+            _stops.Add(boundary with { GreaterThanOrEqual = greaterThanOrEqual });
+            return;
+        }
+
+        string? formula = null;
+        if (formulaLength > 0)
+        {
+            // formula is a CFVOParsedFormula: cbFmla counts rgce, while the structure repeats
+            // that count as cce before the tokens and carries an rgcb length after them.
+            if (body.Length < 28)
+            {
+                _pendingInvalid = true;
+                return;
+            }
+
+            uint tokenLength = BinaryPrimitives.ReadUInt32LittleEndian(body[24..]);
+            if (tokenLength != formulaLength || tokenLength > 16_384 || tokenLength > body.Length - 28)
+            {
+                _pendingInvalid = true;
+                return;
+            }
+
+            int tokenCount = (int)tokenLength;
+            int extraLengthOffset = 28 + tokenCount;
+            if (extraLengthOffset + 4 > body.Length)
+            {
+                _pendingInvalid = true;
+                return;
+            }
+
+            uint extraLength = BinaryPrimitives.ReadUInt32LittleEndian(body[extraLengthOffset..]);
+            if (extraLength > body.Length - extraLengthOffset - 4)
+            {
+                _pendingInvalid = true;
+                return;
+            }
+
+            formula = decoder.Decode(body.Slice(28, tokenCount), _ranges[0].Start, sheetIndex: 0);
+            if (formula is null)
+            {
+                _pendingInvalid = true;
+                return;
+            }
+        }
+        else if (type == 7)
+        {
+            _pendingInvalid = true;
+            return;
+        }
+
+        if (formula is null && (!double.IsFinite(number) ||
+            (type is 4 or 5 && (number < 0 || number > 100))))
+        {
+            _pendingInvalid = true;
+            return;
+        }
+
+        ConditionalValue stop = (type, formula) switch
+        {
+            (1, string text) => new ConditionalValue(ConditionalValueType.Number, text),
+            (4, string text) => new ConditionalValue(ConditionalValueType.Percent, text),
+            (5, string text) => new ConditionalValue(ConditionalValueType.Percentile, text),
+            (7, string text) => ConditionalValue.Formula(text),
+            (4, _) => ConditionalValue.Percent(number),
+            (5, _) => ConditionalValue.Percentile(number),
             _ => ConditionalValue.Number(number),
         };
-        _stops.Add(stop);
+        _stops.Add(stop with { GreaterThanOrEqual = greaterThanOrEqual });
     }
 
     /// <summary>Reads one color of the open block (<c>BrtColor</c>, 2.4.337).</summary>
     public void ReadColor(ReadOnlySpan<byte> body)
     {
-        if (_collecting)
-            _colors.Add(XlsbStyles.ReadColor(body));
+        if (!_collecting)
+            return;
+        if (body.Length < 8)
+        {
+            _pendingInvalid = true;
+            return;
+        }
+
+        _colors.Add(XlsbStyles.ReadColor(body));
     }
 
     /// <summary>
@@ -174,7 +301,7 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
     {
         if (_pendingKind is { } kind)
         {
-            ConditionalFormatRule? rule = BuildGraded(kind);
+            ConditionalFormatRule? rule = _pendingInvalid ? null : BuildGraded(kind);
             if (rule is null)
                 _unmodelled++;
             else
@@ -182,6 +309,8 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
         }
 
         _pendingKind = null;
+        _pendingActivityFormula = null;
+        _pendingInvalid = false;
         _collecting = false;
         _stops.Clear();
         _colors.Clear();
@@ -195,6 +324,7 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
                 Ranges = _ranges,
                 Type = kind,
                 Priority = _pendingPriority,
+                Formulas = ActivityFormulas(),
                 ColorScale = new ColorScale { Values = [.. _stops], Colors = [.. _colors] },
             },
         ConditionalFormatType.DataBar when _stops.Count >= 2 =>
@@ -203,21 +333,25 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
                 Ranges = _ranges,
                 Type = kind,
                 Priority = _pendingPriority,
+                Formulas = ActivityFormulas(),
                 DataBar = new DataBar
                 {
                     Minimum = _stops[0],
                     Maximum = _stops[1],
                     Color = _colors.Count > 0 ? _colors[0] : ExcelColor.FromRgb(0x63, 0x8E, 0xC6),
                     ShowValue = _barShowValue,
+                    MinimumLength = _barMinimumLength,
+                    MaximumLength = _barMaximumLength,
                 },
             },
-        ConditionalFormatType.IconSet when _stops.Count >= 3 &&
+        ConditionalFormatType.IconSet when _stops.Count >= 3 && (uint)_iconSetId <= 0x10 &&
             Reading.ConditionalFormatCollector.IconSetName((byte)_iconSetId, _stops.Count) is { } name =>
             new ConditionalFormatRule
             {
                 Ranges = _ranges,
                 Type = kind,
                 Priority = _pendingPriority,
+                Formulas = ActivityFormulas(),
                 IconSet = new IconSet
                 {
                     Name = name,
@@ -228,6 +362,9 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
             },
         _ => null,
     };
+
+    private IReadOnlyList<string> ActivityFormulas() =>
+        _pendingActivityFormula is null ? [] : [_pendingActivityFormula];
 
     /// <summary>Hands the rules to the sheet, once the whole part has been read.</summary>
     public void Finish(Worksheet sheet, Action<WorkbookWarning> warn)
@@ -283,24 +420,43 @@ internal sealed class XlsbConditionalFormats(PtgDecoder decoder)
 
     /// <summary>
     /// A <c>CFParsedFormula</c>, present only when the length field before the strings said so.
-    /// The length itself is not to be trusted for the size — the record states it as a flag —
-    /// so the tokens carry their own count.
+    /// The header value is only a presence flag; cce and cb inside the structure delimit its
+    /// token and ancillary-data streams.
     /// </summary>
     private string? ReadFormula(ReadOnlySpan<byte> body, ref int offset, uint present)
     {
         if (present == 0 || offset + 4 > body.Length)
             return null;
 
-        int tokens = (int)BinaryPrimitives.ReadUInt32LittleEndian(body[offset..]);
+        uint tokenLength = BinaryPrimitives.ReadUInt32LittleEndian(body[offset..]);
         offset += 4;
-        if (tokens <= 0 || offset + tokens > body.Length)
+        if (tokenLength is 0 or > 16_384 || tokenLength > body.Length - offset)
+        {
+            offset = body.Length;
             return null;
+        }
 
+        int tokens = (int)tokenLength;
+        ReadOnlySpan<byte> rgce = body.Slice(offset, tokens);
+        offset += tokens;
+        if (offset + 4 > body.Length)
+        {
+            offset = body.Length;
+            return null;
+        }
+
+        uint extraLength = BinaryPrimitives.ReadUInt32LittleEndian(body[offset..]);
+        offset += 4;
+        if (extraLength > body.Length - offset)
+        {
+            offset = body.Length;
+            return null;
+        }
+
+        offset += (int)extraLength;
         // A rule's formula reads as it would in the top-left cell of the range it covers.
         CellRef anchor = _ranges.Count > 0 ? _ranges[0].Start : new CellRef(1, 1);
-        string? text = decoder.Decode(body.Slice(offset, tokens), anchor, sheetIndex: 0);
-        offset += tokens;
-        return text;
+        return decoder.Decode(rgce, anchor, sheetIndex: 0);
     }
 
     private static IReadOnlyList<RangeRef> ReadRanges(ReadOnlySpan<byte> body)

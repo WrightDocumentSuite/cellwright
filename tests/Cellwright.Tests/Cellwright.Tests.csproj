@@ -22,4 +22,8 @@
     <ProjectReference Include="..\..\src\Cellwright\Cellwright.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Fixtures\X14\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -17,6 +17,12 @@ public sealed class CellComment
     /// <summary>Author, or <see langword="null"/> when the file recorded none.</summary>
     public string? Author { get; init; }
 
+    /// <summary>
+    /// Revision identifier carried by modern Excel. Thread placeholders use the identifier of
+    /// the threaded root they represent.
+    /// </summary>
+    internal string? RevisionUid { get; set; }
+
     /// <inheritdoc/>
     public override string ToString() => Author is null ? $"{Cell}: {Text}" : $"{Cell} ({Author}): {Text}";
 }
@@ -66,6 +72,9 @@ public sealed class CommentCollection : IReadOnlyCollection<CellComment>
 
     /// <summary>Adds a note read from a file without marking the collection as edited.</summary>
     internal void AddFromFile(CellComment comment) => _comments[comment.Cell] = comment;
+
+    /// <summary>Marks a loaded comments part for regeneration after placeholder reconciliation.</summary>
+    internal void MarkModified() => IsModified = true;
 
     /// <summary>
     /// Moves every note to the cell the mapping gives it, dropping the ones it maps to nothing.

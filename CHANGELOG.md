@@ -6,6 +6,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 While the major version is zero, breaking changes may land in minor releases: the public surface
 is not frozen yet.
 
+## [0.1.3] — 2026-08-10
+
+### Added
+
+- **A common load budget** (`Cellwright`, `Cellwright.Xls`) now bounds input, inflated package
+  data, XML complexity, cells, text, media, embedded objects and encrypted containers across
+  XLSX, XLSB and XLS. Limit failures expose stable machine-readable fields, and asynchronous
+  readers propagate cancellation through OPC, CFB, encryption and VBA parsing.
+- **Interactive PDF comments** (`Cellwright.Pdf`) export classic notes and threaded roots/replies
+  as durable PDF annotations. Tagged output links them through `Annot`/`OBJR`, `StructParent` and
+  `ParentTree`, including explicit MCR children when a repeated cell spans pages.
+
+### Changed
+
+- Threaded comments now preserve mentions and extension metadata until the owning text changes,
+  reconcile legacy placeholders across sheets, copy malformed duplicate-id graphs deterministically
+  and avoid overwriting unrelated package parts during regeneration.
+- Conditional-format and formula evaluation gained x14 icon-set integration, safer shared-formula
+  expansion and stricter budget accounting for materialized formula text.
+- PDF export gained system-font resolution and comment-aware diagnostics while retaining opt-in
+  comment rendering.
+
 ## [0.1.2] — 2026-08-01
 
 The first release cut from the public repository. It touches no code beyond the PDF package's
@@ -157,6 +179,7 @@ silence. The main ones as of this release:
 
 The full lists are in [docs/](docs/).
 
+[0.1.3]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.3
 [0.1.2]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.2
 [0.1.1]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.1
 [0.1.0]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.0

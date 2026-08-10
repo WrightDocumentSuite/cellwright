@@ -80,6 +80,24 @@ public sealed class PaginationTests
     }
 
     [Fact]
+    public void AnExplicitSparsePrintAreaKeepsItsBlankPages()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = book.Sheets.Add("Sheet1");
+        sheet["A5"] = "SPARSE";
+        sheet.SetPrintArea("A1:A9");
+        sheet.PageSetup.AddRowBreak(4);
+        sheet.PageSetup.AddRowBreak(7);
+
+        using Rendered rendered = Rendered.Of(book);
+
+        Assert.Equal(3, rendered.PageCount);
+        Assert.DoesNotContain("SPARSE", rendered.Text(0), StringComparison.Ordinal);
+        Assert.Contains("SPARSE", rendered.Text(1), StringComparison.Ordinal);
+        Assert.DoesNotContain("SPARSE", rendered.Text(2), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AManualColumnBreakDoesTheSameAcross()
     {
         Workbook book = Grid(rows: 2, columns: 6);
@@ -106,6 +124,24 @@ public sealed class PaginationTests
         Assert.Contains("HEADER", rendered.Text(0), StringComparison.Ordinal);
         Assert.Contains("HEADER", rendered.Text(1), StringComparison.Ordinal);
         Assert.Equal("HEADER", rendered.Lines(1)[0]);
+    }
+
+    [Fact]
+    public void ARepeatedTitlePrintsOnOtherwiseBlankBands()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = book.Sheets.Add("Sheet1");
+        sheet["A1"] = "HEADER";
+        sheet.SetPrintArea("A1:A9");
+        sheet.SetRepeatRows(1, 1);
+        sheet.PageSetup.AddRowBreak(4);
+        sheet.PageSetup.AddRowBreak(7);
+
+        using Rendered rendered = Rendered.Of(book);
+
+        Assert.Equal(3, rendered.PageCount);
+        for (int page = 0; page < rendered.PageCount; page++)
+            Assert.Contains("HEADER", rendered.Text(page), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -137,6 +137,49 @@ public sealed class EncryptedPackageTests
         Assert.Contains("16", failure.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void AnOversizedCryptoMetadataAttributeIsRefusedBeforeBase64BufferAllocation()
+    {
+        string descriptor = Descriptor("AES", keyBits: 128, blockSize: 16).Replace(
+            "encryptedKeyValue=\"AAAAAAAAAAAAAAAAAAAAAA==\"",
+            $"encryptedKeyValue=\"{new string('A', (4 * 1024) + 1)}\"",
+            StringComparison.Ordinal);
+
+        XlsFormatException failure = Assert.Throws<XlsFormatException>(() =>
+            AgileEncryption.Decrypt(
+                Encoding.UTF8.GetBytes(descriptor),
+                new byte[8],
+                [Password],
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("encryptedKeyValue", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("4096", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnOversizedEncryptionDescriptorIsRefusedBeforeItsCfbStreamIsMaterialized()
+    {
+        byte[] oversizedInfo = new byte[(1 * 1024 * 1024) + 9];
+        using var encrypted = new MemoryStream();
+        await CompoundFileWriter.WriteAsync(
+            encrypted,
+            [
+                new CompoundFileWriter.NamedStream("EncryptionInfo", oversizedInfo),
+                new CompoundFileWriter.NamedStream("EncryptedPackage", new byte[8]),
+            ],
+            TestContext.Current.CancellationToken);
+        encrypted.Position = 0;
+
+        XlsFormatException failure = await Assert.ThrowsAsync<XlsFormatException>(async () =>
+            await Spreadsheet.LoadAsync(
+                encrypted,
+                new XlsLoadOptions { LeaveOpen = true, Password = Password },
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("EncryptionInfo", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("1048584", failure.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// Runs the descriptor through the reader. The package handed over is empty because these
     /// cases all fail while reading the descriptor, before any byte of it is touched.

@@ -35,8 +35,18 @@ internal static class XlsWorkbookWriter
         var sheetStarts = new List<int>(workbook.Sheets.Count);
         for (int index = 0; index < workbook.Sheets.Count; index++)
         {
+            Worksheet sheet = workbook.Sheets[index];
+            if (sheet.ThreadedComments.Count > 0)
+            {
+                Warn(new WorkbookWarning(
+                    "ThreadedCommentsNotWritten",
+                    $"'{sheet.Name}' has {sheet.ThreadedComments.Count} threaded comment message(s). " +
+                    "The .xls format predates threaded comments, so they are not in the file; " +
+                    "convert them to classic comments when their text must be retained."));
+            }
+
             sheetStarts.Add(sheetStream.Length);
-            new SheetWriter(context, workbook.Sheets[index], index).Write(sheetStream);
+            new SheetWriter(context, sheet, index).Write(sheetStream);
         }
 
         using var globalStream = new BiffWriter(1 << 16);

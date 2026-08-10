@@ -48,6 +48,20 @@ internal static class FormulaText
     }
 
     /// <summary>
+    /// Copies a formula from one cell to another, moving only the relative axes of its A1
+    /// references. This is the semantics Excel uses for formulas attached to a range, such as
+    /// conditional-format conditions written relative to the range's top-left cell.
+    /// </summary>
+    public static string? Translate(string? formula, CellRef from, CellRef to)
+    {
+        if (string.IsNullOrEmpty(formula) || from == to)
+            return formula;
+
+        var rewriter = new RelativeReferenceTranslator(to.Row - from.Row, to.Column - from.Column);
+        return Rewrite(formula, ref rewriter);
+    }
+
+    /// <summary>
     /// Renders a sheet name as a formula prefix, quoting it when Excel would: anything but
     /// letters, digits and underscores, or a leading digit, needs the apostrophes.
     /// </summary>
@@ -106,6 +120,14 @@ internal static class FormulaText
 
                 case '#':
                     position = SkipErrorLiteral(text, position);
+                    continue;
+
+                case '[' when !StartsSheetPrefix(text, position):
+                    // A structured-reference column may itself look exactly like an A1 cell
+                    // (Table1[A1], [@B2]). It is a name, not a coordinate to translate. An
+                    // external-book prefix such as [1]Data! is deliberately left to the normal
+                    // reference scanner below.
+                    position = SkipBracketedReference(text, position);
                     continue;
 
                 default:
@@ -209,6 +231,39 @@ internal static class FormulaText
             }
 
             return i + 1;
+        }
+
+        return text.Length;
+    }
+
+    private static bool StartsSheetPrefix(ReadOnlySpan<char> text, int position)
+    {
+        int probe = position;
+        return ReferenceScanner.TryScanSheetPrefix(
+            text, ref probe, out _, out _, out _);
+    }
+
+    private static int SkipBracketedReference(ReadOnlySpan<char> text, int position)
+    {
+        int depth = 0;
+        for (int i = position; i < text.Length; i++)
+        {
+            if (text[i] == '\'' && i + 1 < text.Length)
+            {
+                // Structured-reference column names use an apostrophe to escape the next
+                // bracket (and other special characters).
+                i++;
+                continue;
+            }
+
+            if (text[i] == '[')
+            {
+                depth++;
+            }
+            else if (text[i] == ']' && --depth == 0)
+            {
+                return i + 1;
+            }
         }
 
         return text.Length;
@@ -335,6 +390,52 @@ internal static class FormulaText
                 return false;
 
             return shift.Apply(ref token.Start, ref token.End, out token.IsBroken);
+        }
+    }
+
+    /// <summary>Moves the unanchored row and column coordinates as a copied formula moves.</summary>
+    private readonly struct RelativeReferenceTranslator(int rows, int columns) : IReferenceRewriter
+    {
+        public bool Rewrite(ref ReferenceToken token)
+        {
+            RefPart start = token.Start;
+            RefPart end = token.End;
+            bool changed = Translate(ref start, out bool broken);
+            if (!broken && end.Kind != RefPartKind.None)
+                changed |= Translate(ref end, out broken);
+
+            if (!changed)
+                return false;
+
+            token.Start = start;
+            token.End = end;
+            token.IsBroken = broken;
+            return true;
+        }
+
+        private bool Translate(ref RefPart part, out bool broken)
+        {
+            broken = false;
+            int row = part.Row;
+            int column = part.Column;
+
+            if ((part.Kind is RefPartKind.Cell or RefPartKind.Row) && !part.RowAbsolute)
+                row += rows;
+            if ((part.Kind is RefPartKind.Cell or RefPartKind.Column) && !part.ColumnAbsolute)
+                column += columns;
+
+            if (((part.Kind is RefPartKind.Cell or RefPartKind.Row) && !SheetLimits.IsValidRow(row)) ||
+                ((part.Kind is RefPartKind.Cell or RefPartKind.Column) && !SheetLimits.IsValidColumn(column)))
+            {
+                broken = true;
+                return true;
+            }
+
+            if (row == part.Row && column == part.Column)
+                return false;
+
+            part = part with { Row = row, Column = column };
+            return true;
         }
     }
 }

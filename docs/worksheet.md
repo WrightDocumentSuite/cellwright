@@ -42,12 +42,12 @@ sheet.InsertColumns(4);
 sheet.DeleteColumns(2, 2);
 ```
 
-More than cells move. Row heights and column widths, grouping, merges, hyperlinks, comments,
-validation and conditional-formatting rules, table ranges, auto-filter, page breaks, and sheet-
-protection exceptions follow. Formulas across the whole workbook are retargeted: a range that gains
-a row inside it expands; a reference to a deleted cell becomes `#REF!`; defined names (including
-print area) are updated the same way. Absolute references shift together with relative ones — `$`
-protects against copying a formula, not against the grid moving underneath.
+More than cells move. Row heights and column widths, grouping, merges, hyperlinks, classic and
+threaded comments, validation and conditional-formatting rules, table ranges, auto-filter, page
+breaks, and sheet-protection exceptions follow. Formulas across the whole workbook are retargeted:
+a range that gains a row inside it expands; a reference to a deleted cell becomes `#REF!`; defined
+names (including print area) are updated the same way. Absolute references shift together with
+relative ones — `$` protects against copying a formula, not against the grid moving underneath.
 
 ```csharp
 // Was: C1 = SUM(B1:B5), D1 = B3*2
@@ -147,24 +147,46 @@ foreach (ThreadedComment root in sheet.ThreadedComments.Threads)
 
 There are two parts at two levels: threads hang off the sheet; people hang off the workbook,
 because an author who writes on three sheets is one person. A comment names its author by id;
-`book.People` resolves it.
+`book.People` resolves it. `Add` and `Reply` accept only the exact `Person` object held by that
+workbook, and `Reply` accepts only a parent from the same worksheet collection. This prevents a
+save from producing dangling person or cross-part parent identifiers.
 
 Nesting is one level deep: a reply to a reply attaches to the thread, not a chain — that is how
 the format works and how Excel shows the discussion. `Threads` builds a tree from a flat message
-list; `Remove` on the first message takes its replies with it.
+list; `Remove` on the first message takes its replies with it. Malformed imported graphs are
+bounded and deterministic: the first message wins a duplicate id, missing parents become roots,
+and every member of a parent cycle becomes a root. Load diagnostics report each condition instead
+of dropping those messages or walking a cycle forever.
 
 **Stub note.** Next to each thread the file places a classic note with an author like `tc={id}` so
-a reader that knows nothing about threads still shows something (MS-XLSX 2.3.7.3). Such stubs do
-not appear in `Comments` — their author is an id, not a person — and on save they are
+a reader that knows nothing about threads still shows something (MS-XLSX 2.3.7.3). Its `xr:uid`
+is normally the same root id, but MS-XLSX makes that correspondence a SHOULD: the mandatory
+`tc={id}` author token is the actual key. Reconciliation runs workbook-wide after all sheets load:
+the first matching stub's cell (and sheet) moves every message in the thread, each additional stub
+gets a full copy with fresh message ids and remapped parents, a root without a stub is removed, and
+an orphan stub is removed. UID contradictions are diagnosed and repaired on the next save; a
+missing UID is accepted. A real author such as `tc=Reviewer` is not a placeholder because its
+suffix is not a GUID; an exact `tc={GUID}` token is reserved by the format and an orphan is removed
+with `OrphanThreadedCommentPlaceholderRemoved` rather than silently. Valid stubs are
 **regenerated from the threads**. Editing ordinary comments therefore no longer detaches threads
-from cells: previously rewriting the `comments` part removed the stubs and a `ThreadedComments`
-warning said so honestly; that warning is gone because there is nothing left to lose.
+from cells. Moving the last conversation to another sheet transfers its collection-level
+`extLst`; if the destination already has a different one, both remain on their respective parts
+and `ThreadedCommentCollectionMetadataConflict` reports that they could not be merged safely.
 
 The converse follows: editing threads, comments, or the people list regenerates both parts
 together. While none of that is touched, the file carries them byte for byte.
 
-Not modeled: `mentions` (people mentioned inside text) and `extLst`; they are lost when a thread is
-rewritten.
+Changing a loaded message's `Text`, `Resolved`, or `Cell` property counts as an edit and is saved;
+inserting or deleting rows and columns moves every message in the thread with its cell. A
+structural edit that leaves all thread anchors untouched keeps the original part in copy-on-write
+mode. When a rewrite is necessary, loaded `mentions` (including their person ids and text ranges)
+and `extLst` markup on messages, people, and their containing lists are carried through opaquely.
+They also follow a copied sheet. Changing `Text` cannot safely rebase mention/hyperlink ranges or
+vendor checksums, so it drops that message's opaque metadata and raises
+`ThreadedCommentTextMetadataDropped` through `Workbook.OnWarning`; unrelated container and person
+extensions stay intact. `HasOpaqueMetadata` identifies such a message and
+`ClearOpaqueMetadata()` performs the same drop explicitly without a warning. An absent source
+`dT` stays absent on rewrite rather than acquiring a fabricated current timestamp.
 
 ## Excel tables
 
@@ -252,8 +274,19 @@ reported as `DrawingShapesNotWritten`.
 
 ## Conditional formatting
 
-Rules are read, edited, and created anew. Order is by `Priority`: lower numbers are tried first;
-`Add` assigns the next free priority itself.
+Rules are read, edited, and created anew. Assigning `Priority`, `Ranges`, or `Formulas` on a loaded
+rule switches the sheet from lossless markup replay to model-generated markup. Order is by
+`Priority`: lower numbers are tried first; `Add` assigns the next free positive value and rejects
+collisions by choosing another one. Saving preserves every valid unique priority because pivot
+formatting can refer to that number; only non-positive and duplicated values are repaired.
+One rule object belongs to at most one worksheet: remove it (or clear its collection) before adding
+that same instance elsewhere; use a separate rule instance when both sheets need the rule.
+Malformed duplicate priorities retain collection order during evaluation, so the result is still
+deterministic before save. Extension-only x14 rules share the same worksheet-wide priority space:
+their positive priorities are reserved when ordinary rules are regenerated, while x14 companion
+records without a priority reserve nothing. The icon-set stage does not infer a companion link.
+The later extended-data-bar stage may pair one only through a single unambiguous GUID match;
+orphaned, duplicate, or wrong-type matches remain opaque.
 
 ```csharp
 sheet.ConditionalFormats.Add(ConditionalFormatRule.CellGreaterThan("B2:B99", 1000, DifferentialStyle.Good));
@@ -269,9 +302,23 @@ sheet.ConditionalFormats.Add(
 
 // Gradients, bars, and icons
 sheet.ConditionalFormats.Add(ConditionalFormatRule.Scale("B2:B99", ColorScale.RedYellowGreen));
-sheet.ConditionalFormats.Add(ConditionalFormatRule.Bars("E2:E99", new DataBar { ShowValue = false }));
+sheet.ConditionalFormats.Add(ConditionalFormatRule.Bars("E2:E99", new DataBar
+{
+    MinimumLength = 15,
+    MaximumLength = 85,
+    ShowValue = false,
+}));
 sheet.ConditionalFormats.Add(ConditionalFormatRule.Icons("F2:F99", IconSet.TrafficLights));
 ```
+
+Data bars default to 10% at the minimum and 90% at the maximum, the defaults defined by
+SpreadsheetML; added rules must satisfy `0 <= MinimumLength <= MaximumLength <= 100`. An icon
+threshold includes an exact match by default; set
+`ConditionalValue.GreaterThanOrEqual` to `false` when that boundary is strictly greater-than.
+The `Value` of a number, percent, or percentile threshold may also be a formula string; it is
+written in the base `<cfvo type="..." val="..."/>` shape that current Excel produces and reads.
+Duplicate and unique rules use Excel's value comparison: numeric-looking text is canonicalized, so
+the number `1`, text `"1.00"`, and text `" 01 "` are the same occurrence.
 
 A rule colors with a **differential format** (`dxf`) — overrides on top of the cell’s own formatting
 — not a full cell style. Only what is listed is set:
@@ -297,9 +344,22 @@ read. Assigning `rule.Style` is an ordinary edit: the sheet switches to regenera
 new format is appended after preserved ones.
 
 While sheet rules are untouched, `conditionalFormatting` blocks return to the file as they were.
-The first edit regenerates them from the model; rules the model does not describe (modern icon sets
-and everything in the `x14` extension) return as their original XML — they have `IsOpaque` true and
-`dxfId` still points into the saved format table.
+The first edit regenerates them from the model; base rules the model does not describe return as
+their original XML — they have `IsOpaque` true and `dxfId` still points into the saved format table.
+The trailing `x14` extension also returns verbatim. Its rules are not placed in the editable model,
+but their priorities remain occupied so adding a base rule cannot create a collision that makes
+Excel repair the worksheet. A priority-bearing, non-custom x14 icon set whose name is exactly
+`3Stars`, `3Triangles`, or `5Boxes` has a separate read-only projection for evaluation and
+printing. Custom `cfIcon` mixtures, `NoIcons`, base-set names carried through x14, and extended
+data bars remain opaque and are diagnosed rather than approximated.
+
+A value edit, a zero-count structural edit, and a sheet rename keep the source extension. A real
+row/column edit cannot safely retarget every opaque `xm:sqref` on the edited sheet, so it removes
+only that sheet's `x14:conditionalFormattings`, preserves unrelated children of `extLst` and x14
+rules on other sheets, releases the removed priorities, and reports
+`StructuralEditDroppedExtensionConditionalFormats`. Valid x14 formulas cannot contain local-cell
+or inter-sheet bang references, so no other sheet needs to be discarded. This prevents a later
+save from carrying stale ranges or silently rewriting an x14-only set as a base rule.
 
 ## Printing
 
@@ -335,15 +395,18 @@ Worksheet copy = book.Sheets.Copy("January", "February");   // copy inserted rig
 ```
 
 A copy gets everything the model represents: values, styles, formulas, widths and heights, merges,
-freeze panes, auto-filter, comments, links, validation rules, conditional formatting, print
-settings, and protection. Every mutable object is copied by value, not shared: inserting a row in
-the copy does not shift a rule on the original.
+freeze panes, auto-filter, classic and threaded comments, links, validation rules, conditional
+formatting, print settings, and protection. Every mutable object is copied by value, not shared:
+inserting a row in the copy does not shift a rule or a conversation on the original. Threaded
+messages receive new ids, and reply parent ids are remapped to the copied roots; their workbook-wide
+authors are reused.
 
-A copy does not get what belongs to the source worksheet part in the package: drawings, pictures,
-and other raw markup. One part cannot live at two paths, and a copy is a new sheet, not a second
-name for the old one. Formulas are copied as text, so in-sheet references follow the copy while
-those that name the source sheet by name still point at it. Table names are unique in the
-workbook, so a copied table gets its own: `Sales` → `Sales2`.
+A copy does not get unsupported drawing objects or other raw markup that belongs only to the source
+worksheet part. Modelled pictures are copied with independent anchors while sharing their immutable
+image bytes. One raw part cannot live at two paths, and a copy is a new sheet, not a second name for
+the old one. Formulas are copied as text, so in-sheet references follow the copy while those that
+name the source sheet by name still point at it. Table names are unique in the workbook, so a copied
+table gets its own: `Sales` → `Sales2`.
 
 ## Document properties
 

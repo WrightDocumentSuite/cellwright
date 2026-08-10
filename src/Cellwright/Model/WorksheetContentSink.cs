@@ -13,7 +13,9 @@ internal sealed class WorksheetContentSink(
     int[] styleMap,
     IReadOnlyList<OpcRelationship> relationships,
     bool preserveMarkup,
-    Action<WorkbookWarning> warn) : ISheetContentSink
+    Action<WorkbookWarning> warn,
+    DocumentLoadBudgetState? loadBudget = null,
+    bool accountText = false) : ISheetContentSink
 {
     private readonly Dictionary<int, FormulaGroup> _sharedGroups = [];
     private bool _warnedAboutDataTables;
@@ -103,6 +105,7 @@ internal sealed class WorksheetContentSink(
 
     public void OnCell(CellRef cell, in CellValue value, int rawStyleIndex, string? formula)
     {
+        Account(value, formula);
         if (!value.IsBlank)
             sheet.Values.Set(cell.Row, cell.Column, value);
         if (formula is not null)
@@ -128,12 +131,28 @@ internal sealed class WorksheetContentSink(
     /// </summary>
     public void OnPooledCell(CellRef cell, in CellValue value, StyleId style, string? formula)
     {
+        Account(value, formula);
         if (!value.IsBlank)
             sheet.Values.Set(cell.Row, cell.Column, value);
         if (formula is not null)
             sheet.Formulas.Set(cell.Row, cell.Column, formula);
         if (style != StyleId.Default)
             sheet.StyleIndexes.Set(cell.Row, cell.Column, style.Index);
+    }
+
+    private void Account(in CellValue value, string? formula)
+    {
+        if (loadBudget is null)
+            return;
+
+        loadBudget.AddCell();
+        if (!accountText)
+            return;
+
+        if (value.TryGetText(out string text))
+            loadBudget.AddCellText(text);
+        if (formula is not null)
+            loadBudget.AddCellText(formula);
     }
 
     public void OnAutoFilter(RangeRef range, bool hasCriteria)

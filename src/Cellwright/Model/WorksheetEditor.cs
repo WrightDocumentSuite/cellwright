@@ -111,6 +111,7 @@ internal static class WorksheetEditor
 
         sheet.Hyperlinks.Reanchor(range => shift.TryApply(ref range) ? range : null);
         sheet.Comments.Reanchor(cell => shift.TryApply(ref cell) ? cell : null);
+        sheet.ThreadedComments.Reanchor(cell => shift.TryApply(ref cell) ? cell : null);
         sheet.Pictures.Reanchor(cell => shift.TryApply(ref cell) ? cell : null);
         ReanchorMarkup(sheet, shift);
 
@@ -253,6 +254,23 @@ internal static class WorksheetEditor
         {
             string ownSheet = other.Name;
             other.Formulas.Transform(formula => FormulaText.Shift(formula, shift, ownSheet));
+
+            // x14 icon-set formulas cannot contain local-cell or bang references, so a grid edit
+            // cannot retarget a rule on another sheet. The edited sheet's xm:sqref can move,
+            // however, and its raw form cannot be rewritten through the model. Remove only that
+            // sheet's x14 CF container; unrelated extensions and other sheets remain untouched.
+            if (string.Equals(other.Name, shift.SheetName, StringComparison.OrdinalIgnoreCase) &&
+                other.Markup?.RemoveExtensionConditionalFormats() is true)
+            {
+                string axis = shift.Rows ? "row" : "column";
+                string operation = shift.Count > 0
+                    ? $"inserting {shift.Count} {axis}(s)"
+                    : $"deleting {-shift.Count} {axis}(s)";
+                workbook.OnWarning?.Invoke(new WorkbookWarning(
+                    "StructuralEditDroppedExtensionConditionalFormats",
+                    $"'{other.Name}': {operation} at {shift.Index} on '{shift.SheetName}' removed x14 " +
+                    "conditional formatting whose raw ranges or formulas cannot be retargeted safely."));
+            }
 
             foreach (DataValidation validation in other.Validations)
             {

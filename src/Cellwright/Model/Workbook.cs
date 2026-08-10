@@ -160,6 +160,17 @@ public sealed class Workbook
         return workbook;
     }
 
+    /// <summary>Loads from a package already admitted by an outer container reader.</summary>
+    internal static async ValueTask<Workbook> LoadAsync(
+        OpcPackage package, LoadOptions options, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        ArgumentNullException.ThrowIfNull(options);
+        var workbook = new Workbook();
+        await WorkbookLoader.LoadAsync(workbook, package, options, cancellationToken).ConfigureAwait(false);
+        return workbook;
+    }
+
     /// <summary>Loads a workbook from a file.</summary>
     public static ValueTask<Workbook> LoadAsync(
         string path, LoadOptions? options = null, CancellationToken cancellationToken = default)

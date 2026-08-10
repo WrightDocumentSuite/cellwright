@@ -37,9 +37,27 @@ internal static class OoxmlEncryption
     /// <param name="container">A container <see cref="IsEncryptedPackage"/> accepted.</param>
     /// <param name="password">Password to try; the default one is used when none is given.</param>
     /// <param name="warn">Reports a package that fails the integrity check stored with it.</param>
+    /// <param name="loadBudget">Shared counters inherited by the decrypted package.</param>
+    /// <param name="cancellationToken">Cancels password stretching and package decryption.</param>
     /// <exception cref="XlsFormatException">The scheme is unsupported, or no password opens the file.</exception>
-    public static byte[] Decrypt(CompoundFile container, string? password, Action<WorkbookWarning>? warn = null)
+    public static byte[] Decrypt(
+        CompoundFile container,
+        string? password,
+        Action<WorkbookWarning>? warn = null,
+        DocumentLoadBudgetState? loadBudget = null,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        long? infoLength = container.TryGetStreamLength(InfoStream);
+        if (infoLength is null)
+            throw new XlsFormatException("The encrypted file has no encryption header.");
+        long maxInfoBytes = AgileEncryption.MaxDescriptorBytes + 8L;
+        if (infoLength > maxInfoBytes)
+        {
+            throw new XlsFormatException(
+                $"The EncryptionInfo stream has {infoLength} bytes; encryption metadata is limited to {maxInfoBytes}.");
+        }
+
         byte[] info = container.TryReadStream(InfoStream) ??
             throw new XlsFormatException("The encrypted file has no encryption header.");
         byte[] package = container.TryReadStream(PackageStream) ??
@@ -49,14 +67,30 @@ internal static class OoxmlEncryption
 
         ushort major = BinaryPrimitives.ReadUInt16LittleEndian(info);
         ushort minor = BinaryPrimitives.ReadUInt16LittleEndian(info.AsSpan(2));
+        long nestedInput = Math.Max(0, package.LongLength - 8);
+        if (package.Length >= 8)
+        {
+            long declared = BinaryPrimitives.ReadInt64LittleEndian(package);
+            if (declared >= 0)
+                nestedInput = Math.Max(nestedInput, declared);
+        }
+        if (loadBudget is not null)
+        {
+            DocumentLoadBudgetState.Ensure(
+                nameof(DocumentLoadBudget.MaxInputBytes),
+                loadBudget.Budget.MaxInputBytes,
+                nestedInput);
+        }
 
         // 4.4 is agile encryption, whose header is an XML descriptor; 2.2 through 4.2 are the
         // fixed AES scheme of Office 2007. Minor 3 is the extensible form, which delegates the
         // whole thing to a third-party module and so cannot be read without it.
         byte[]? plain = (major, minor) switch
         {
-            (4, 4) => AgileEncryption.Decrypt(info.AsSpan(8), package, Candidates(password), warn),
-            (2 or 3 or 4, 2) => DecryptStandard(info.AsSpan(8), package, Candidates(password)),
+            (4, 4) => AgileEncryption.Decrypt(
+                info.AsSpan(8), package, Candidates(password), warn, cancellationToken, loadBudget),
+            (2 or 3 or 4, 2) => DecryptStandard(
+                info.AsSpan(8), package, Candidates(password), cancellationToken),
             _ => throw new XlsFormatException(
                 $"The file uses encryption version {major}.{minor}, which this library does not implement."),
         };
@@ -111,7 +145,11 @@ internal static class OoxmlEncryption
     /// from fifty thousand rounds of SHA-1. Everything about it is fixed except the key length,
     /// so the header is read only far enough to confirm that it is AES and how wide.
     /// </summary>
-    private static byte[]? DecryptStandard(ReadOnlySpan<byte> info, byte[] encryptedPackage, IEnumerable<string> passwords)
+    private static byte[]? DecryptStandard(
+        ReadOnlySpan<byte> info,
+        byte[] encryptedPackage,
+        IEnumerable<string> passwords,
+        CancellationToken cancellationToken)
     {
         if (info.Length < 4)
             throw new XlsFormatException("The encryption header declares no size.");
@@ -140,9 +178,10 @@ internal static class OoxmlEncryption
 
         foreach (string candidate in passwords)
         {
-            byte[] key = StandardKey(candidate, salt, keyBytes);
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[] key = StandardKey(candidate, salt, keyBytes, cancellationToken);
             if (VerifiesStandard(key, encryptedVerifier, encryptedHash))
-                return StandardPackage(key, encryptedPackage);
+                return StandardPackage(key, encryptedPackage, cancellationToken);
         }
 
         return null;
@@ -153,11 +192,16 @@ internal static class OoxmlEncryption
     /// stretched by fifty thousand rounds, then run through the two-pad construction that turns
     /// one digest into as many key bytes as AES asks for.
     /// </summary>
-    private static byte[] StandardKey(string password, ReadOnlySpan<byte> salt, int keyBytes)
+    private static byte[] StandardKey(
+        string password,
+        ReadOnlySpan<byte> salt,
+        int keyBytes,
+        CancellationToken cancellationToken)
     {
         const int Rounds = 50_000;
         CryptoHash sha1 = CryptoHash.Sha1;
-        byte[] stretched = sha1.Spin(sha1.Of(salt, Encoding.Unicode.GetBytes(password)), Rounds);
+        byte[] stretched = sha1.Spin(
+            sha1.Of(salt, Encoding.Unicode.GetBytes(password)), Rounds, cancellationToken);
         byte[] seed = sha1.Of(stretched, block: 0);
 
         Span<byte> first = stackalloc byte[64];
@@ -186,8 +230,12 @@ internal static class OoxmlEncryption
     }
 
     /// <summary>Decrypts the package stream, whose first eight bytes are the plaintext length.</summary>
-    private static byte[] StandardPackage(byte[] key, byte[] encryptedPackage)
+    private static byte[] StandardPackage(
+        byte[] key,
+        byte[] encryptedPackage,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (encryptedPackage.Length < 8)
             throw new XlsFormatException("The encrypted package stream is too short to hold its own length.");
 
@@ -197,6 +245,7 @@ internal static class OoxmlEncryption
         using Aes aes = Aes.Create();
         aes.Key = key;
         byte[] plain = aes.DecryptEcb(encryptedPackage.AsSpan(8, available), PaddingMode.None);
+        cancellationToken.ThrowIfCancellationRequested();
         return declared is >= 0 && declared < plain.Length ? plain[..(int)declared] : plain;
     }
 }

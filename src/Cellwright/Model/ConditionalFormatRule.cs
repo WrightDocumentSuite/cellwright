@@ -15,7 +15,18 @@ namespace Cellwright;
 public sealed class ConditionalFormatRule
 {
     /// <summary>Ranges the rule covers. At least one is required.</summary>
-    public required IReadOnlyList<RangeRef> Ranges { get; set; }
+    public required IReadOnlyList<RangeRef> Ranges
+    {
+        get => _ranges;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _ranges = [.. value];
+            Owner?.MarkModified();
+        }
+    }
+
+    private IReadOnlyList<RangeRef> _ranges = [];
 
     /// <summary>What the rule tests.</summary>
     public ConditionalFormatType Type { get; init; }
@@ -25,10 +36,22 @@ public sealed class ConditionalFormatRule
 
     /// <summary>
     /// Formulas the rule needs, without the leading <c>=</c>: the bounds of a comparison or the
-    /// single condition of an <see cref="ConditionalFormatType.Expression"/> rule. Relative
-    /// references are written as they read in the top-left cell of the first range.
+    /// single condition of an <see cref="ConditionalFormatType.Expression"/> rule; graded rules
+    /// can use the first formula as their activity condition. Relative references are written as
+    /// they read in the top-left cell of the first range.
     /// </summary>
-    public IReadOnlyList<string> Formulas { get; set; } = [];
+    public IReadOnlyList<string> Formulas
+    {
+        get => _formulas;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _formulas = [.. value];
+            Owner?.MarkModified();
+        }
+    }
+
+    private IReadOnlyList<string> _formulas = [];
 
     /// <summary>Needle of the text rules.</summary>
     public string? Text { get; init; }
@@ -55,7 +78,19 @@ public sealed class ConditionalFormatRule
     public string? TimePeriod { get; init; }
 
     /// <summary>Order in which the sheet's rules are tried; the lowest number wins first.</summary>
-    public int Priority { get; set; }
+    public int Priority
+    {
+        get => _priority;
+        set
+        {
+            if (_priority == value)
+                return;
+            _priority = value;
+            Owner?.MarkModified();
+        }
+    }
+
+    private int _priority;
 
     /// <summary>Whether a match stops the rules after this one from being tried.</summary>
     public bool StopIfTrue { get; init; }
@@ -117,8 +152,9 @@ public sealed class ConditionalFormatRule
     internal ConditionalFormatRule Clone()
     {
         var copy = (ConditionalFormatRule)MemberwiseClone();
-        copy.Ranges = [.. Ranges];
-        copy.Formulas = [.. Formulas];
+        copy.Owner = null;
+        copy._ranges = [.. _ranges];
+        copy._formulas = [.. _formulas];
         return copy;
     }
 
@@ -240,10 +276,17 @@ public sealed class ConditionalFormatCollection : IReadOnlyList<ConditionalForma
     public ConditionalFormatRule Add(ConditionalFormatRule rule)
     {
         ArgumentNullException.ThrowIfNull(rule);
+        ThrowIfOwned(rule);
         if (rule.Ranges.Count == 0)
             throw new ArgumentException("A conditional format must cover at least one range.", nameof(rule));
+        if (rule.DataBar is { HasValidLengths: false })
+        {
+            throw new ArgumentException(
+                "Data-bar lengths must satisfy 0 <= MinimumLength <= MaximumLength <= 100.",
+                nameof(rule));
+        }
 
-        if (rule.Priority <= 0)
+        if (rule.Priority <= 0 || PriorityTaken(rule.Priority))
             rule.Priority = NextPriority();
         rule.Owner = this;
         _rules.Add(rule);
@@ -255,7 +298,12 @@ public sealed class ConditionalFormatCollection : IReadOnlyList<ConditionalForma
     public bool Remove(ConditionalFormatRule rule)
     {
         bool removed = _rules.Remove(rule);
-        IsModified |= removed;
+        if (removed)
+        {
+            rule.Owner = null;
+            IsModified = true;
+        }
+
         return removed;
     }
 
@@ -264,6 +312,9 @@ public sealed class ConditionalFormatCollection : IReadOnlyList<ConditionalForma
     {
         if (_rules.Count == 0)
             return;
+
+        foreach (ConditionalFormatRule rule in _rules)
+            rule.Owner = null;
         _rules.Clear();
         IsModified = true;
     }
@@ -271,6 +322,8 @@ public sealed class ConditionalFormatCollection : IReadOnlyList<ConditionalForma
     /// <summary>Adds a rule read from a file without marking the collection as edited.</summary>
     internal void AddFromFile(ConditionalFormatRule rule)
     {
+        ArgumentNullException.ThrowIfNull(rule);
+        ThrowIfOwned(rule);
         rule.Owner = this;
         _rules.Add(rule);
     }
@@ -278,12 +331,51 @@ public sealed class ConditionalFormatCollection : IReadOnlyList<ConditionalForma
     /// <summary>Marks the collection as owned by the model, e.g. after a structural edit.</summary>
     internal void MarkModified() => IsModified = true;
 
+    private static void ThrowIfOwned(ConditionalFormatRule rule)
+    {
+        if (rule.Owner is not null)
+        {
+            throw new ArgumentException(
+                "A conditional-format rule already belongs to a worksheet. Remove it first or add a separate rule instance.",
+                nameof(rule));
+        }
+    }
+
+    private bool PriorityTaken(int priority)
+    {
+        foreach (ConditionalFormatRule existing in _rules)
+        {
+            if (existing.Priority == priority)
+                return true;
+        }
+
+        return false;
+    }
+
     private int NextPriority()
     {
         int highest = 0;
         foreach (ConditionalFormatRule rule in _rules)
             highest = Math.Max(highest, rule.Priority);
-        return highest + 1;
+        if (highest < int.MaxValue)
+            return highest + 1;
+
+        // A malformed or adversarial input can already use Int32.MaxValue. Do not wrap the
+        // next rule to a negative priority: find the first positive gap instead.
+        var used = new HashSet<int>(_rules.Count);
+        foreach (ConditionalFormatRule rule in _rules)
+        {
+            if (rule.Priority > 0)
+                used.Add(rule.Priority);
+        }
+
+        for (int candidate = 1; candidate < int.MaxValue; candidate++)
+        {
+            if (!used.Contains(candidate))
+                return candidate;
+        }
+
+        throw new InvalidOperationException("No positive conditional-format priority is available.");
     }
 
     /// <inheritdoc/>

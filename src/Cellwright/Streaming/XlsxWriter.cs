@@ -18,6 +18,7 @@ public sealed class XlsxWriter : IAsyncDisposable
     private readonly List<(string Type, string PartPath)> _addedWorkbookRelationships = [];
     private readonly HashSet<string> _replacedWorkbookRelationshipTypes = new(StringComparer.Ordinal);
     private readonly HashSet<string> _usedPartPaths = new(OpcNames.Instance);
+    private readonly HashSet<string> _releasedPreservedPartPaths = new(OpcNames.Instance);
     private readonly List<SheetEntry> _sheetEntries = [];
     private readonly List<DefinedNameEntry> _definedNames = [];
     private readonly string _workbookPartPath;
@@ -274,6 +275,20 @@ public sealed class XlsxWriter : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Releases a model-owned source part before regeneration. A canonical source name can then
+    /// be reused, and a noncanonical one is omitted instead of surviving as unreachable stale
+    /// data in the saved package.
+    /// </summary>
+    internal void ReleasePreservedPart(string partPath)
+    {
+        if (_preserved?.Parts.ContainsKey(partPath) != true)
+            return;
+
+        _releasedPreservedPartPaths.Add(partPath);
+        _usedPartPaths.Remove(partPath);
+    }
+
     /// <summary>Finalizes the workbook: shared strings, styles, workbook part, relationships, content types.</summary>
     public async ValueTask DisposeAsync()
     {
@@ -391,6 +406,8 @@ public sealed class XlsxWriter : IAsyncDisposable
         HashSet<string> reachable = _preserved.Reachable(roots);
         foreach ((string partPath, byte[] content) in _preserved.Parts)
         {
+            if (_releasedPreservedPartPaths.Contains(partPath))
+                continue;
             if (!reachable.Contains(partPath) && !_preserved.OrphanParts.Contains(partPath))
                 continue;
 
@@ -407,6 +424,8 @@ public sealed class XlsxWriter : IAsyncDisposable
         foreach ((string source, IReadOnlyList<OpcRelationship> relationships) in _preserved.Relationships)
         {
             if (source == "/" || source == _workbookPartPath)
+                continue;
+            if (_releasedPreservedPartPaths.Contains(source))
                 continue;
             if (!reachable.Contains(source) && !_preserved.OrphanParts.Contains(source))
                 continue;

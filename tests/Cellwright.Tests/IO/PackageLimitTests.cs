@@ -82,11 +82,11 @@ public sealed class PackageLimitTests
             Limits = new PackageLimits { MaxPartSize = 1024 * 1024 },
         };
 
-        XlsxFormatException failure = await Assert.ThrowsAsync<XlsxFormatException>(async () =>
+        DocumentLoadLimitException failure = await Assert.ThrowsAsync<DocumentLoadLimitException>(async () =>
             await Workbook.LoadAsync(package, options, TestContext.Current.CancellationToken));
 
-        Assert.Contains("image1.bin", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("limit", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(nameof(DocumentLoadBudget.MaxPartBytes), failure.LimitName);
+        Assert.Equal(1024 * 1024, failure.Limit);
     }
 
     [Fact]
@@ -99,11 +99,11 @@ public sealed class PackageLimitTests
             Limits = new PackageLimits { MaxPartSize = 1024 * 1024 },
         };
 
-        XlsxFormatException failure = await Assert.ThrowsAsync<XlsxFormatException>(async () =>
+        DocumentLoadLimitException failure = await Assert.ThrowsAsync<DocumentLoadLimitException>(async () =>
             await Workbook.LoadAsync(package, options, TestContext.Current.CancellationToken));
 
-        Assert.Contains("sharedStrings.xml", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("limit", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(nameof(DocumentLoadBudget.MaxPartBytes), failure.LimitName);
+        Assert.Equal(1024 * 1024, failure.Limit);
     }
 
     [Fact]

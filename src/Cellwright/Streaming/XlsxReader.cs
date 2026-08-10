@@ -72,11 +72,24 @@ public sealed partial class XlsxReader : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(stream);
         XlsxReaderOptions effective = options ?? XlsxReaderOptions.Default;
+        DocumentLoadBudget budget = effective.EffectiveBudget;
+        budget.Validate();
         await FileSignature.RejectNonPackageAsync(stream, cancellationToken).ConfigureAwait(false);
         OpcPackage package = await OpcPackage
-            .OpenReadAsync(stream, effective.LeaveOpen, cancellationToken, effective.Limits)
+            .OpenReadAsync(stream, effective.LeaveOpen, cancellationToken, budget)
             .ConfigureAwait(false);
-        var reader = new XlsxReader(package, effective);
+        return await OpenAsync(package, effective, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Opens a package already admitted under a shared outer load budget.</summary>
+    internal static async ValueTask<XlsxReader> OpenAsync(
+        OpcPackage package,
+        XlsxReaderOptions options,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        ArgumentNullException.ThrowIfNull(options);
+        var reader = new XlsxReader(package, options);
         try
         {
             await reader.InitializeAsync(cancellationToken).ConfigureAwait(false);

@@ -9,8 +9,17 @@ namespace Cellwright.Formulas;
 internal sealed class EvalContext
 {
     private readonly Func<Worksheet, int, int, CellValue> _readCell;
-    private readonly Dictionary<string, FormulaProgram?> _programs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FormulaProgram?> _namePrograms = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LinkedListNode<DynamicProgram>> _dynamicPrograms =
+        new(StringComparer.Ordinal);
+    private readonly LinkedList<DynamicProgram> _dynamicLru = [];
     private readonly Stack<Evaluator> _spareEvaluators = new();
+
+    /// <summary>
+    /// Maximum distinct formulas retained for dynamic text such as INDIRECT targets. A copied
+    /// formula can generate one target per worksheet row, so this cache must be bounded.
+    /// </summary>
+    internal const int MaxDynamicPrograms = 1_024;
 
     public EvalContext(Workbook workbook, Func<Worksheet, int, int, CellValue> readCell)
     {
@@ -60,28 +69,62 @@ internal sealed class EvalContext
     public int NameDepth { get; set; }
 
     /// <summary>
-    /// Compiles formula text that is not attached to a cell, reusing earlier results. Defined
-    /// names and <c>INDIRECT</c> both go through here: without the cache, an <c>INDIRECT</c>
-    /// filled down a column would re-parse its target on every row of every pass.
+    /// Compiles the formula of a defined name, reusing earlier results. This cache is naturally
+    /// bounded by the workbook's finite names collection.
     /// </summary>
-    internal FormulaProgram? GetProgram(string text)
+    internal FormulaProgram? GetNameProgram(string text)
     {
-        if (_programs.TryGetValue(text, out FormulaProgram? cached))
+        if (_namePrograms.TryGetValue(text, out FormulaProgram? cached))
             return cached;
 
-        FormulaProgram? program;
+        FormulaProgram? program = ParseProgram(text);
+        _namePrograms[text] = program;
+        return program;
+    }
+
+    /// <summary>
+    /// Compiles formula text produced dynamically by INDIRECT. Both successful and failed parses
+    /// live in an exact LRU so a high-cardinality formula cannot retain a program per cell while
+    /// the common repeated-target case still parses once.
+    /// </summary>
+    internal FormulaProgram? GetDynamicProgram(string text)
+    {
+        if (_dynamicPrograms.TryGetValue(text, out LinkedListNode<DynamicProgram>? cached))
+        {
+            _dynamicLru.Remove(cached);
+            _dynamicLru.AddLast(cached);
+            return cached.Value.Program;
+        }
+
+        var entry = new DynamicProgram(text, ParseProgram(text));
+        LinkedListNode<DynamicProgram> node = _dynamicLru.AddLast(entry);
+        _dynamicPrograms.Add(text, node);
+        if (_dynamicPrograms.Count > MaxDynamicPrograms)
+        {
+            LinkedListNode<DynamicProgram> oldest = _dynamicLru.First!;
+            _dynamicLru.RemoveFirst();
+            _dynamicPrograms.Remove(oldest.Value.Text);
+        }
+
+        return entry.Program;
+    }
+
+    /// <summary>Programs retained outside the engine's primary formula cache.</summary>
+    internal int NestedProgramCount => _namePrograms.Count + _dynamicPrograms.Count;
+
+    private FormulaProgram? ParseProgram(string text)
+    {
         try
         {
-            program = FormulaParser.Parse(text, Workbook);
+            return FormulaParser.Parse(text, Workbook);
         }
         catch (FormulaParseException)
         {
-            program = null;
+            return null;
         }
-
-        _programs[text] = program;
-        return program;
     }
+
+    private sealed record DynamicProgram(string Text, FormulaProgram? Program);
 
     /// <summary>
     /// Runs a program inside the formula currently being evaluated. Evaluators own a reusable

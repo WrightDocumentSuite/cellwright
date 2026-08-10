@@ -115,6 +115,64 @@ public sealed class SheetOrderTests
         Assert.True(copy.Protection.IsEnabled);
     }
 
+    [Fact]
+    public async Task ACopyCarriesAnIndependentThreadedConversation()
+    {
+        Workbook workbook = Workbook.Create();
+        Worksheet source = workbook.Sheets.Add("Report");
+        Person nadia = workbook.People.Add("Nadia");
+        Person tom = workbook.People.Add("Tom");
+        ThreadedComment root = source.ThreadedComments.Add(CellRef.Parse("B2"), "Net or gross?", nadia);
+        source.ThreadedComments.Reply(root, "Net.", tom);
+        root.Resolved = true;
+
+        // Normalize timestamps through the format before comparing a source part with its copy.
+        Workbook loaded = await SaveAndReloadAsync(workbook);
+        Worksheet loadedSource = loaded.Sheets["Report"];
+        ThreadedComment sourceRoot = loadedSource.ThreadedComments[0];
+        ThreadedComment sourceReply = loadedSource.ThreadedComments[1];
+
+        Worksheet copy = loaded.Sheets.Copy(loadedSource, "Report copy");
+        ThreadedComment copyRoot = copy.ThreadedComments[0];
+        ThreadedComment copyReply = copy.ThreadedComments[1];
+
+        Assert.NotSame(sourceRoot, copyRoot);
+        Assert.NotSame(sourceReply, copyReply);
+        Assert.NotEqual(sourceRoot.Id, copyRoot.Id);
+        Assert.NotEqual(sourceReply.Id, copyReply.Id);
+        Assert.Equal(copyRoot.Id, copyReply.ParentId);
+        Assert.NotEqual(sourceRoot.Id, copyReply.ParentId);
+        Assert.Equal(sourceRoot.Cell, copyRoot.Cell);
+        Assert.Equal(sourceReply.Cell, copyReply.Cell);
+        Assert.Equal(sourceRoot.Text, copyRoot.Text);
+        Assert.Equal(sourceReply.Text, copyReply.Text);
+        Assert.Equal(sourceRoot.Created, copyRoot.Created);
+        Assert.Equal(sourceReply.Created, copyReply.Created);
+        Assert.Equal(sourceRoot.PersonId, copyRoot.PersonId);
+        Assert.Equal(sourceReply.PersonId, copyReply.PersonId);
+        Assert.True(copyRoot.Resolved);
+        Assert.False(copyReply.Resolved);
+
+        copyRoot.Text = "Copied question";
+        Assert.Equal("Net or gross?", sourceRoot.Text);
+
+        Workbook reloaded = await SaveAndReloadAsync(loaded);
+        Worksheet savedSource = reloaded.Sheets["Report"];
+        Worksheet savedCopy = reloaded.Sheets["Report copy"];
+        ThreadedComment savedCopyRoot = savedCopy.ThreadedComments[0];
+        ThreadedComment savedCopyReply = savedCopy.ThreadedComments[1];
+
+        Assert.Equal("Net or gross?", savedSource.ThreadedComments[0].Text);
+        Assert.Equal("Copied question", savedCopyRoot.Text);
+        Assert.Equal("Net.", savedCopyReply.Text);
+        Assert.Equal(savedCopyRoot.Id, savedCopyReply.ParentId);
+        Assert.True(savedCopyRoot.Resolved);
+        Assert.Equal(4, reloaded.Sheets.SelectMany(static sheet => sheet.ThreadedComments)
+            .Select(static comment => comment.Id)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count());
+    }
+
     /// <summary>
     /// Every mutable thing a sheet owns is copied by value. Sharing one would mean an insert on
     /// the copy silently moving a rule on the original.

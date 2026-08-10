@@ -151,6 +151,11 @@ internal static class XlsxSchema
     /// <summary>Canonical persons part path, of which a workbook has at most one.</summary>
     public const string PartPersons = "/xl/persons/person.xml";
 
+    /// <summary>A persons part path that avoids an occupied canonical URI.</summary>
+    public static string PersonsPart(int index) => index == 1
+        ? PartPersons
+        : string.Create(null, stackalloc char[64], $"/xl/persons/person{index}.xml");
+
     /// <summary>Canonical legacy VML drawing part path for a 1-based sheet index.</summary>
     public static string VmlDrawingPart(int index) =>
         string.Create(null, stackalloc char[64], $"/xl/drawings/vmlDrawing{index}.vml");

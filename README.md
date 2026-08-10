@@ -79,8 +79,9 @@ formula engine.
 - **Diagnostics instead of silent failure**: recovery-oriented loading, `WorkbookWarning` with
   codes, `LoadDiagnostics`; a file of the wrong format (`.ods`, `.docx`, an encrypted package) is
   named for what it is rather than crashing the parser.
-- **A foreign file is hostile input**: `LoadOptions.Limits` caps what a package is allowed to
-  expand into — a zip bomb gets a message, not an `OutOfMemoryException`.
+- **A foreign file is hostile input**: the finite `DocumentLoadBudget` caps source bytes, package
+  expansion, XML, cells, text and resources across XLSX/XLSB/XLS — a zip bomb gets a stable
+  `DocumentLoadLimitException`, not an `OutOfMemoryException`.
 - **Async-first**: package I/O on the asynchronous `ZipArchive` APIs of .NET 10.
 
 ## A quick look
@@ -258,7 +259,8 @@ benchmarks/                       BenchmarkDotNet vs EPPlus 8 / ClosedXML / Exce
 samples/                          working examples of every layer
 ```
 
-The deliberate limitations are listed in [architecture.md](docs/architecture.md),
+The untrusted-input contract is in
+[loading-untrusted-input.md](docs/loading-untrusted-input.md). The deliberate limitations are listed in [architecture.md](docs/architecture.md),
 [worksheet.md](docs/worksheet.md), [formulas.md](docs/formulas.md), [xls.md](docs/xls.md),
 [xlsb.md](docs/xlsb.md), [pictures.md](docs/pictures.md), [markdown.md](docs/markdown.md) and
 [vba.md](docs/vba.md). In short: a loaded chart can be read and replaced but not edited, and pivot

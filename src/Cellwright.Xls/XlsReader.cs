@@ -32,17 +32,20 @@ public sealed class XlsReader : IAsyncDisposable
     private readonly List<SheetInfo> _sheets = [];
     private readonly List<int> _sheetOffsets = [];
     private readonly RowBlock _block = new();
+    private readonly DocumentLoadBudgetState _loadBudget;
 
     /// <summary>Where the formula sits whose text result arrives in the record after it.</summary>
     private int _pendingStringRow = -1;
     private int _pendingStringColumn = -1;
     private bool _disposed;
 
-    private XlsReader(byte[] stream, IRecordDecryptor? decryptor, XlsGlobals globals)
+    private XlsReader(
+        byte[] stream, IRecordDecryptor? decryptor, XlsGlobals globals, DocumentLoadBudgetState loadBudget)
     {
         _stream = stream;
         _decryptor = decryptor;
         _globals = globals;
+        _loadBudget = loadBudget;
 
         foreach (XlsSheetEntry entry in globals.Sheets)
         {
@@ -84,10 +87,12 @@ public sealed class XlsReader : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(stream);
         options ??= new XlsLoadOptions();
 
-        byte[] bytes = await XlsWorkbook.ReadAllAsync(stream, options.LeaveOpen, options.Limits, cancellationToken).ConfigureAwait(false);
+        DocumentLoadBudget budget = options.EffectiveBudget;
+        byte[] bytes = await XlsWorkbook.ReadAllAsync(stream, options.LeaveOpen, budget, cancellationToken).ConfigureAwait(false);
+        var loadBudget = new DocumentLoadBudgetState(budget);
         (byte[] workbookStream, IRecordDecryptor? decryptor, XlsGlobals globals) =
-            XlsWorkbookReader.OpenForStreaming(bytes, options);
-        return new XlsReader(workbookStream, decryptor, globals);
+            XlsWorkbookReader.OpenForStreaming(bytes, options, loadBudget, cancellationToken);
+        return new XlsReader(workbookStream, decryptor, globals, loadBudget);
     }
 
     /// <summary>Enumerates the rows of a sheet located by name (case-insensitive).</summary>
@@ -130,7 +135,8 @@ public sealed class XlsReader : IAsyncDisposable
         // Where each row's last cell sits, so that a row can be handed over the moment nothing
         // more can be added to it. Nothing in the format stops a producer from coming back to
         // a row later, and files in the wild do, so the alternative to knowing is guessing.
-        Dictionary<int, int> lastRecordOfRow = ScanRowEnds(reader, _sheetOffsets[sheetIndex]);
+        Dictionary<int, int> lastRecordOfRow = ScanRowEnds(
+            reader, _sheetOffsets[sheetIndex], cancellationToken);
 
         _block.Reset();
         reader.Seek(_sheetOffsets[sheetIndex]);
@@ -167,7 +173,8 @@ public sealed class XlsReader : IAsyncDisposable
     /// record is. Only headers and row numbers are read, so the pass costs a fraction of the
     /// one that follows it.
     /// </summary>
-    private static Dictionary<int, int> ScanRowEnds(BiffReader reader, int sheetOffset)
+    private static Dictionary<int, int> ScanRowEnds(
+        BiffReader reader, int sheetOffset, CancellationToken cancellationToken)
     {
         var ends = new Dictionary<int, int>();
         reader.Seek(sheetOffset);
@@ -176,6 +183,7 @@ public sealed class XlsReader : IAsyncDisposable
         int lastRow = -1;
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!inSheet)
             {
                 if (reader.RecordType == BiffRecordType.Bof)
@@ -283,8 +291,9 @@ public sealed class XlsReader : IAsyncDisposable
     {
         int cursor = 6;
         string text = _globals.Version >= BiffVersion.Biff8
-            ? BiffStrings.ReadUnicodeString(body, ref cursor)
+            ? BiffStrings.ReadUnicodeString(body, ref cursor, _loadBudget)
             : BiffStrings.ReadByteString(body, ref cursor, _globals.Encoding, lengthBytes: 2);
+        AccountText(text);
         return CellValue.Text(text);
     }
 
@@ -311,9 +320,10 @@ public sealed class XlsReader : IAsyncDisposable
 
         int cursor = 0;
         string text = _globals.Version >= BiffVersion.Biff8
-            ? BiffStrings.ReadUnicodeString(body, ref cursor)
+            ? BiffStrings.ReadUnicodeString(body, ref cursor, _loadBudget)
             : BiffStrings.ReadByteString(body, ref cursor, _globals.Encoding, lengthBytes: 2);
-        Place(_pendingStringRow, _pendingStringColumn, CellValue.Text(text));
+        AccountText(text);
+        _block.Place(_pendingStringRow, _pendingStringColumn, CellValue.Text(text));
         _pendingStringColumn = -1;
     }
 
@@ -357,7 +367,14 @@ public sealed class XlsReader : IAsyncDisposable
         if (row < 1 || column < 1 || column > SheetLimits.MaxColumn)
             return;
 
+        _loadBudget.AddCell();
         _block.Place(row, column, value);
+    }
+
+    private void AccountText(string text)
+    {
+        long item = 0;
+        _loadBudget.AddCellText(text.Length, ref item);
     }
 
     /// <inheritdoc/>

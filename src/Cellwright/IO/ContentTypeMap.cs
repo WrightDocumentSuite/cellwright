@@ -52,12 +52,13 @@ internal sealed class ContentTypeMap
     }
 
     /// <summary>Parses the content-types XML.</summary>
-    public static ContentTypeMap Parse(Stream stream)
+    public static ContentTypeMap Parse(Stream stream, CancellationToken cancellationToken)
     {
         var map = new ContentTypeMap();
         using var reader = XmlReader.Create(stream, XmlDefaults.ReaderSettings);
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (reader.NodeType != XmlNodeType.Element)
                 continue;
 

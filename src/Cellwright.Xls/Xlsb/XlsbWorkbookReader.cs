@@ -25,6 +25,7 @@ internal static class XlsbWorkbookReader
         }
 
         var globals = new XlsGlobals { Version = BiffVersion.Biff12 };
+        DocumentLoadBudgetState? loadBudget = package.LoadBudget;
         List<string?> sheetRelationships = XlsbWorkbookPart.Read(
             await package.ReadPartBytesAsync(workbookPart, cancellationToken).ConfigureAwait(false),
             globals);
@@ -39,17 +40,30 @@ internal static class XlsbWorkbookReader
         // format does not fix where they live, and a package written by another tool is free to
         // put them elsewhere.
         if (Find(relationships, XlsxSchema.RelSharedStrings, workbookPart) is { } strings && package.PartExists(strings))
-            XlsbStringTable.Read(await package.ReadPartBytesAsync(strings, cancellationToken).ConfigureAwait(false), globals);
+            XlsbStringTable.Read(
+                await package.ReadPartBytesAsync(strings, cancellationToken).ConfigureAwait(false),
+                globals,
+                loadBudget,
+                cancellationToken);
 
+        IReadOnlyList<DifferentialStyle> differentialStyles = [];
         if (Find(relationships, XlsxSchema.RelStyles, workbookPart) is { } styles && package.PartExists(styles))
-            XlsbStyles.Read(await package.ReadPartBytesAsync(styles, cancellationToken).ConfigureAwait(false), globals, workbook.StylePool);
+        {
+            differentialStyles = XlsbStyles.Read(
+                await package.ReadPartBytesAsync(styles, cancellationToken).ConfigureAwait(false),
+                globals,
+                workbook.StylePool);
+        }
+        workbook.LoadedDifferentialStyles = differentialStyles;
 
         var sheetNames = new List<string>(globals.Sheets.Count);
         foreach (XlsSheetEntry entry in globals.Sheets)
             sheetNames.Add(entry.Name);
 
         var decoder = new PtgDecoder(globals, sheetNames);
-        await ReadSheetsAsync(workbook, package, globals, sheetRelationships, relationships, workbookPart, decoder, Warn, cancellationToken)
+        await ReadSheetsAsync(
+                workbook, package, globals, sheetRelationships, relationships, workbookPart,
+                decoder, differentialStyles, Warn, cancellationToken)
             .ConfigureAwait(false);
 
         DefinedNameLoader.Apply(workbook, globals, decoder, Warn);
@@ -60,7 +74,8 @@ internal static class XlsbWorkbookReader
     private static async Task ReadSheetsAsync(
         Workbook workbook, OpcPackage package, XlsGlobals globals,
         List<string?> sheetRelationships, IReadOnlyList<OpcRelationship> relationships, string workbookPart,
-        PtgDecoder decoder, Action<WorkbookWarning> warn, CancellationToken cancellationToken)
+        PtgDecoder decoder, IReadOnlyList<DifferentialStyle> differentialStyles,
+        Action<WorkbookWarning> warn, CancellationToken cancellationToken)
     {
         for (int index = 0; index < globals.Sheets.Count; index++)
         {
@@ -84,12 +99,32 @@ internal static class XlsbWorkbookReader
             IReadOnlyList<OpcRelationship> sheetLinks =
                 await package.GetRelationshipsAsync(part, cancellationToken).ConfigureAwait(false);
 
-            var sink = new WorksheetContentSink(sheet, styleMap: [], relationships: sheetLinks, preserveMarkup: false, warn);
-            new XlsbSheetParser(globals, decoder, index, warn)
+            var sink = new WorksheetContentSink(
+                sheet,
+                styleMap: [],
+                relationships: sheetLinks,
+                preserveMarkup: false,
+                warn,
+                package.LoadBudget);
+            new XlsbSheetParser(
+                    globals, decoder, index, warn, package.LoadBudget, cancellationToken)
                 .Parse(await package.ReadPartBytesAsync(part, cancellationToken).ConfigureAwait(false), sink);
+            AttachConditionalStyles(sheet, differentialStyles);
 
             await ReadSheetPartsAsync(package, sheet, sheetLinks, part, decoder, warn, cancellationToken)
                 .ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Shows each binary conditional rule the differential format its dxfId names.</summary>
+    internal static void AttachConditionalStyles(
+        Worksheet sheet, IReadOnlyList<DifferentialStyle> differentialStyles)
+    {
+        foreach (ConditionalFormatRule rule in sheet.ConditionalFormats)
+        {
+            if (!rule.IsOpaque && rule.Style is null &&
+                rule.SourceStyleId is int index && (uint)index < (uint)differentialStyles.Count)
+                rule.AttachSourceStyle(differentialStyles[index]);
         }
     }
 

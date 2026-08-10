@@ -48,6 +48,38 @@ internal static class OpcPath
     }
 
     /// <summary>
+    /// Decodes the URI spelling of a part name without allowing encoded separators or dot
+    /// segments to change the package graph.
+    /// </summary>
+    public static string Unescape(string path)
+    {
+        if (!path.Contains('%', StringComparison.Ordinal))
+            return path;
+
+        string decoded;
+        try
+        {
+            decoded = Uri.UnescapeDataString(path);
+        }
+        catch (UriFormatException)
+        {
+            return path;
+        }
+
+        if (decoded.Count(static c => c == '/') != path.Count(static c => c == '/') || decoded.Contains('\\'))
+            return path;
+
+        foreach (Range range in decoded.AsSpan().Split('/'))
+        {
+            ReadOnlySpan<char> segment = decoded.AsSpan()[range];
+            if (segment is "." or "..")
+                return path;
+        }
+
+        return decoded;
+    }
+
+    /// <summary>
     /// Expresses <paramref name="targetPartPath"/> relative to the part that references it,
     /// which is the form Excel writes and the only one every consumer accepts.
     /// </summary>

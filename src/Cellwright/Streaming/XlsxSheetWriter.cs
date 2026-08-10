@@ -536,7 +536,8 @@ public sealed class XlsxSheetWriter : IAsyncDisposable
         if (_options.ConditionalFormats is not { Count: > 0 } rules || _options.ConditionalStyleIds is not { } styleIds)
             return;
 
-        ConditionalFormatWriter.Write(_xml, rules, styleIds);
+        ConditionalFormatWriter.Write(
+            _xml, rules, styleIds, markup?.ExtensionConditionalFormatPriorities);
     }
 
     /// <summary>

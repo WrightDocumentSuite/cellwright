@@ -1,6 +1,7 @@
 using Cellwright.Pdf.Layout;
 using Cellwright.Styles;
 using Inkwright;
+using Inkwright.Annotations;
 using Inkwright.Content;
 using Inkwright.Cos;
 
@@ -71,7 +72,7 @@ internal sealed partial class ItemPainter
     {
         ArgumentNullException.ThrowIfNull(item);
 
-        bool artifact = _tags is not null && item.Tag is null && item is not LinkItem;
+        bool artifact = _tags is not null && item.Tag is null && item is not (LinkItem or CommentItem);
         if (artifact)
             _canvas.BeginMarkedContent(PdfName.Get("Artifact"));
 
@@ -105,6 +106,9 @@ internal sealed partial class ItemPainter
                 break;
             case LinkItem link:
                 PaintLink(link);
+                break;
+            case CommentItem comment:
+                PaintComment(comment);
                 break;
             default:
                 break;
@@ -223,6 +227,69 @@ internal sealed partial class ItemPainter
             PdfRectangle.FromSize(x, _geometry.ToPdfY(y + height), width, height), link.Url);
     }
 
+    private void PaintComment(CommentItem item)
+    {
+        if (item.Width <= 0 || item.Height <= 0 || item.Thread.Messages.Count == 0)
+            return;
+
+        // Centre the compact marker on the real top-right endpoint: only its lower-left quarter
+        // overlaps the cell, preserving the anchor without covering a narrow cell's value. The
+        // crop clamp keeps edge cells entirely on the physical page.
+        const double NoteSize = 14;
+        double right = _offset.X + ((item.X + item.Width) * _scale);
+        double stagger = Math.Min(item.StackIndex, 4) * 3;
+        double down = Math.Min(stagger, Math.Max(0, (item.Height * _scale) - 1));
+        PdfRectangle crop = _page.CropBox;
+        double x = Math.Clamp(right - (NoteSize / 2), crop.Left, crop.Right - NoteSize);
+        double endpointY = _geometry.ToPdfY(_offset.Y + (item.Y * _scale) + down);
+        double y = Math.Clamp(
+            endpointY - (NoteSize / 2),
+            crop.Bottom,
+            crop.Top - NoteSize);
+        PdfRectangle marker = PdfRectangle.FromSize(x, y, NoteSize, NoteSize);
+
+        var annotations = new PdfMarkupAnnotation[item.Thread.Messages.Count];
+        for (int i = 0; i < item.Thread.Messages.Count; i++)
+        {
+            PdfCommentMessage message = item.Thread.Messages[i];
+            PdfMarkupAnnotation annotation;
+
+            if (message.ParentIndex < 0)
+            {
+                annotation = _page.Annotations.AddNote(
+                    new PdfPoint(x, marker.Top),
+                    message.Text,
+                    message.Author,
+                    PdfNoteIcon.Comment);
+                annotation.Rectangle = marker;
+            }
+            else
+            {
+                if (message.ParentIndex >= i || annotations[message.ParentIndex] is not { } parent)
+                    continue;
+
+                annotation = parent.Reply(message.Text, message.Author);
+            }
+
+            Describe(annotation, message);
+            annotations[i] = annotation;
+            _tags?.AddAnnotation(item.Tag, annotation);
+        }
+    }
+
+    private static void Describe(PdfMarkupAnnotation annotation, PdfCommentMessage message)
+    {
+        // AddNote/Reply provide a current timestamp and Reply can inherit an author's name. Those
+        // are authoring defaults, not source provenance, so overwrite them even when it means null.
+        annotation.Author = message.Author;
+        annotation.Name = message.Name;
+        annotation.Subject = message.Subject;
+        // Author and Subject deliberately stamp /M as authoring APIs. Restore the source dates
+        // last so that a missing date stays missing and a known one is not replaced with now.
+        annotation.CreatedAt = message.Created;
+        annotation.ModifiedAt = message.Created;
+    }
+
     private int BeginTag(TagRef? tag)
     {
         if (tag is null || _tags is null)
@@ -251,4 +318,7 @@ internal interface ITagSink
     /// <summary>Reserves the next marked-content identifier and attaches it to a structure element.</summary>
     /// <param name="tag">The element the sequence belongs to.</param>
     int Next(TagRef tag);
+
+    /// <summary>Places an annotation in reading order under its semantic owner.</summary>
+    void AddAnnotation(TagRef? tag, PdfAnnotation annotation);
 }

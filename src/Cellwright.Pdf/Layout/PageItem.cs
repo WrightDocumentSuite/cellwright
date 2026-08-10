@@ -125,7 +125,7 @@ internal enum IconShape
     /// <summary>A flag on a staff.</summary>
     Flag,
 
-    /// <summary>A triangle pointing up: the warning of the signs set.</summary>
+    /// <summary>A triangle, turned by <see cref="IconItem.Angle"/>.</summary>
     Triangle,
 
     /// <summary>A diamond on its point.</summary>
@@ -145,6 +145,18 @@ internal enum IconShape
 
     /// <summary>A disc with a fraction of it filled, like a pie.</summary>
     Quarters,
+
+    /// <summary>A five-point star, filled from left to right.</summary>
+    Star,
+
+    /// <summary>A short horizontal dash.</summary>
+    Dash,
+
+    /// <summary>A two-by-two group of boxes, filled by degree.</summary>
+    Boxes,
+
+    /// <summary>An intentional absence of an icon.</summary>
+    None,
 }
 
 /// <summary>One icon of an icon-set rule, drawn in a cell.</summary>
@@ -195,4 +207,25 @@ internal sealed class LinkItem : PageItem
 
     /// <summary>How tall it is.</summary>
     public required double Height { get; init; }
+}
+
+/// <summary>An interactive comment thread anchored to the visible rectangle of a cell.</summary>
+/// <remarks>
+/// This item has no content-stream footprint: its icon is a PDF annotation of a fixed viewer size.
+/// Keeping it in the page list nevertheless preserves its reading position beside the cell content
+/// and lets composition decide the anchor without changing measurement or pagination.
+/// </remarks>
+internal sealed class CommentItem : PageItem
+{
+    /// <summary>How wide the visible cell or merge is before the page scale is applied.</summary>
+    public required double Width { get; init; }
+
+    /// <summary>How tall the visible cell or merge is before the page scale is applied.</summary>
+    public required double Height { get; init; }
+
+    /// <summary>The root and replies to create.</summary>
+    public required PdfCommentThread Thread { get; init; }
+
+    /// <summary>Which of several roots sharing this cell this one is.</summary>
+    public int StackIndex { get; init; }
 }

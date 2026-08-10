@@ -20,13 +20,17 @@ namespace Cellwright.Xls.Reading;
 /// next sheet is only possible by knowing where the next sheet starts.
 /// </param>
 /// <param name="warn">Reports what could be recovered but not understood.</param>
+/// <param name="loadBudget">Shared resource counters for this import.</param>
+/// <param name="cancellationToken">Cancels record parsing.</param>
 internal sealed class SheetParser(
     BiffReader reader,
     XlsGlobals globals,
     PtgDecoder decoder,
     int sheetIndex,
     int substreamEnd,
-    Action<WorkbookWarning> warn)
+    Action<WorkbookWarning> warn,
+    DocumentLoadBudgetState? loadBudget = null,
+    CancellationToken cancellationToken = default)
 {
     /// <summary>The pending formula, waiting for the String record that may follow it.</summary>
     private CellRef _pendingStringCell;
@@ -73,6 +77,7 @@ internal sealed class SheetParser(
 
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             ReadOnlySpan<byte> body = reader.Record.Span;
             switch (reader.RecordType)
             {
@@ -430,7 +435,7 @@ internal sealed class SheetParser(
         int xf = BinaryPrimitives.ReadUInt16LittleEndian(body[4..]);
         int index = (int)BinaryPrimitives.ReadUInt32LittleEndian(body[6..]);
         CellRef cell = ReadCellRef(body);
-        SetCell(sink, cell, MakeText(globals.StringAt(index), cell, sink), xf);
+        SetCell(sink, cell, MakeText(globals.StringAt(index), cell, sink, accountText: false), xf);
     }
 
     /// <summary>
@@ -438,8 +443,12 @@ internal sealed class SheetParser(
     /// limit, but files exist that exceed it, and refusing to load one over a single long cell
     /// would be the wrong trade.
     /// </summary>
-    private CellValue MakeText(string text, CellRef cell, WorksheetContentSink sink)
+    private CellValue MakeText(
+        string text, CellRef cell, WorksheetContentSink sink, bool accountText = true)
     {
+        if (accountText)
+            loadBudget?.AddCellText(text);
+
         if (text.Length <= SheetLimits.MaxCellTextLength)
             return CellValue.Text(text);
 
@@ -459,7 +468,7 @@ internal sealed class SheetParser(
         int xf = BinaryPrimitives.ReadUInt16LittleEndian(body[4..]);
         int cursor = 6;
         string text = globals.Version >= BiffVersion.Biff8
-            ? BiffStrings.ReadUnicodeString(body, ref cursor)
+            ? BiffStrings.ReadUnicodeString(body, ref cursor, loadBudget)
             : BiffStrings.ReadByteString(body, ref cursor, globals.Encoding, lengthBytes: 2);
         CellRef cell = ReadCellRef(body);
         SetCell(sink, cell, MakeText(text, cell, sink), xf);
@@ -498,6 +507,8 @@ internal sealed class SheetParser(
         }
 
         string? formula = decoder.Decode(rgce, cell, sheetIndex);
+        if (formula is not null)
+            loadBudget?.AddCellText(formula);
         if (formula is null && rgceLength > 0)
         {
             warn(new WorkbookWarning(
@@ -524,7 +535,7 @@ internal sealed class SheetParser(
 
         int cursor = 0;
         string text = globals.Version >= BiffVersion.Biff8
-            ? BiffStrings.ReadUnicodeString(body, ref cursor)
+            ? BiffStrings.ReadUnicodeString(body, ref cursor, loadBudget)
             : BiffStrings.ReadByteString(body, ref cursor, globals.Encoding, lengthBytes: 2);
         sink.Sheet.Values.Set(
             _pendingStringCell.Row, _pendingStringCell.Column, MakeText(text, _pendingStringCell, sink));
@@ -559,6 +570,7 @@ internal sealed class SheetParser(
         if (formula is null)
             return;
 
+        loadBudget?.AddCellText(formula);
         sink.OnFormulaGroup(new FormulaGroup(FormulaGroupKind.Array, range.Start, range, formula), sharedIndex: null);
         sink.Sheet.Formulas.Set(range.Start.Row, range.Start.Column, formula);
     }
@@ -576,14 +588,20 @@ internal sealed class SheetParser(
 
             string? formula = decoder.Decode(rgce, cell, sheetIndex);
             if (formula is not null)
+            {
+                loadBudget?.AddCellText(formula);
                 sink.Sheet.Formulas.Set(cell.Row, cell.Column, formula);
+            }
         }
 
         foreach ((CellRef cell, byte[] rgce) in _deferredFormulas)
         {
             string? formula = decoder.Decode(rgce, cell, sheetIndex);
             if (formula is not null)
+            {
+                loadBudget?.AddCellText(formula);
                 sink.Sheet.Formulas.Set(cell.Row, cell.Column, formula);
+            }
         }
 
         _sharedMembers.Clear();

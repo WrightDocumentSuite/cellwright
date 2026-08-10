@@ -55,6 +55,9 @@ internal sealed partial class CellPlacer
     /// </summary>
     public SheetTags? Tags { get; init; }
 
+    /// <summary>The interactive comment anchors of the sheet, when the caller opted into them.</summary>
+    public SheetCommentPlan? Comments { get; init; }
+
     /// <summary>
     /// How far right the page itself reaches, in the grid's own space. Text spilling out of the
     /// last column stops here rather than running off the paper.
@@ -243,6 +246,9 @@ internal sealed partial class CellPlacer
             return;
         }
 
+        if (drawn.Shape == IconShape.None)
+            return;
+
         double size = Math.Min(IconSize(height), height);
         if (size <= 0)
             return;
@@ -269,7 +275,9 @@ internal sealed partial class CellPlacer
     private double IconRoom(int row, int column, double height)
     {
         ConditionalAppearance conditional = ConditionalOf(row, column);
-        if (conditional.Icon is not { } icon || IconSetShapes.Of(icon.SetName, icon.Index, icon.Count) is null)
+        if (conditional.Icon is not { } icon ||
+            IconSetShapes.Of(icon.SetName, icon.Index, icon.Count) is not { } drawn ||
+            drawn.Shape == IconShape.None)
             return 0;
 
         return Math.Max(0, Math.Min(IconSize(height), height)) + Padding;

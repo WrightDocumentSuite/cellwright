@@ -9,7 +9,12 @@ namespace Cellwright.Xls.Reading;
 /// Reads the global substream that opens a workbook: which sheets it has and where they start,
 /// the shared strings every text cell points into, the style tables, and the defined names.
 /// </summary>
-internal sealed class GlobalsParser(BiffReader reader, StylePool stylePool, Action<WorkbookWarning> warn)
+internal sealed class GlobalsParser(
+    BiffReader reader,
+    StylePool stylePool,
+    Action<WorkbookWarning> warn,
+    DocumentLoadBudgetState? loadBudget = null,
+    CancellationToken cancellationToken = default)
 {
     private readonly List<XlsFontRecord> _fonts = [];
     private readonly Dictionary<int, string> _formats = [];
@@ -32,6 +37,7 @@ internal sealed class GlobalsParser(BiffReader reader, StylePool stylePool, Acti
 
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             ReadOnlySpan<byte> body = reader.Record.Span;
             switch (reader.RecordType)
             {
@@ -120,7 +126,7 @@ internal sealed class GlobalsParser(BiffReader reader, StylePool stylePool, Acti
     {
         globals.Palette.AddRange(_palette);
         if (_drawingGroup.Count > 0)
-            globals.Blips.AddRange(EscherPictures.ReadStore(EscherPictures.Join(_drawingGroup)));
+            globals.Blips.AddRange(EscherPictures.ReadStore(EscherPictures.Join(_drawingGroup), loadBudget));
 
         foreach (XlsXfRecord xf in rawFormats)
         {
@@ -252,19 +258,24 @@ internal sealed class GlobalsParser(BiffReader reader, StylePool stylePool, Acti
         if (body.Length < 8)
             return [];
 
-        int unique = (int)BinaryPrimitives.ReadUInt32LittleEndian(body[4..]);
-        if (unique <= 0)
+        uint declaredUnique = BinaryPrimitives.ReadUInt32LittleEndian(body[4..]);
+        if (declaredUnique == 0)
             return [];
 
         // A corrupt count could ask for gigabytes; the record's own length bounds what can
         // possibly be in it, since the shortest string costs three bytes.
-        unique = Math.Min(unique, (body.Length / 3) + 1);
+        int unique = (int)Math.Min(declaredUnique, (uint)((body.Length / 3) + 1));
 
+        loadBudget?.AddSharedStrings(unique);
         var strings = new string[unique];
-        var cursor = new BiffStrings.SstCursor(body, reader.ContinuationSizes, offset: 8);
+        var cursor = new BiffStrings.SstCursor(body, reader.ContinuationSizes, offset: 8, loadBudget);
         int read = 0;
         while (read < unique && cursor.HasMore)
-            strings[read++] = cursor.ReadNext();
+        {
+            string text = cursor.ReadNext();
+            loadBudget?.AddCellText(text);
+            strings[read++] = text;
+        }
 
         if (read == unique)
             return strings;

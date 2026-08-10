@@ -20,6 +20,7 @@ public sealed class Worksheet
         Workbook = workbook;
         _name = name;
         Id = id;
+        ThreadedComments = new ThreadedCommentCollection(this);
         Tables = new TableCollection(this);
     }
 
@@ -159,7 +160,7 @@ public sealed class Worksheet
     /// Threaded comments on cells of this sheet — the modern conversations, as opposed to the
     /// classic sticky notes in <see cref="Comments"/>.
     /// </summary>
-    public ThreadedCommentCollection ThreadedComments { get; } = new();
+    public ThreadedCommentCollection ThreadedComments { get; }
 
     /// <summary>Excel tables defined over ranges of this sheet.</summary>
     public TableCollection Tables { get; }

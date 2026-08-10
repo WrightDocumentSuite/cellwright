@@ -30,7 +30,8 @@
   <ItemGroup Label="PDF output">
     <!-- Pinned exactly: Cellwright.Pdf is released alongside this Inkwright, and a floating
          range would let a package resolve against a version it was never built against. -->
-    <PackageVersion Include="Inkwright" Version="0.1.2" />
+    <PackageVersion Include="Inkwright" Version="0.1.3" />
+    <PackageVersion Include="Inkwright.Layout" Version="0.1.3" />
   </ItemGroup>
 
   <ItemGroup Label="Legacy xls">

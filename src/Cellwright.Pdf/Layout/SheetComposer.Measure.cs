@@ -15,24 +15,17 @@ internal sealed partial class SheetComposer
     {
         var measurer = new CellMeasurer(_context, _sheet, grid.Appearances, _conditional);
 
-        for (int r = 0; r < plan.Rows.Length; r++)
+        // The print area may deliberately run far beyond the cells that hold anything. Walk the
+        // sparse value grid rather than every logical cell in that rectangle; the row and column
+        // maps below also leave hidden lines out exactly as the old rectangular walk did.
+        foreach ((int row, int column, CellValue value) in _sheet.Values.EnumerateOccupied(plan.Area))
         {
-            if (grid.RowHeightIsStated(r))
+            int r = grid.RowIndex(row);
+            int c = grid.ColumnIndex(column);
+            if (r < 0 || c < 0 || grid.RowHeightIsStated(r))
                 continue;
 
-            int row = plan.Rows[r];
-            double needed = 0;
-
-            for (int c = 0; c < plan.Columns.Length; c++)
-            {
-                int column = plan.Columns[c];
-                CellValue value = _sheet.Values.Get(row, column);
-                if (value.IsBlank)
-                    continue;
-
-                needed = Math.Max(needed, measurer.HeightNeeded(value, row, column, grid.WidthAt(c)));
-            }
-
+            double needed = measurer.HeightNeeded(value, row, column, grid.WidthAt(c));
             if (needed > 0)
                 grid.GrowRow(r, needed);
         }

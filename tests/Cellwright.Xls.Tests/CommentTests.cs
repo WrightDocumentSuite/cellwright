@@ -79,6 +79,36 @@ public sealed class CommentTests
     }
 
     [Fact]
+    public async Task ThreadedCommentsAreReportedWhenWritingTheLegacyFormat()
+    {
+        Workbook workbook = Workbook.Create();
+        Worksheet sheet = workbook.Sheets.Add("Review");
+        Person person = workbook.People.Add("Reviewer");
+        ThreadedComment thread = sheet.ThreadedComments.Add(CellRef.Parse("B2"), "Check this", person);
+        sheet.ThreadedComments.Reply(thread, "Agreed", person);
+        var warnings = new List<WorkbookWarning>();
+        using var buffer = new MemoryStream();
+
+        await XlsWorkbook.SaveAsync(
+            workbook,
+            buffer,
+            new XlsSaveOptions { LeaveOpen = true, OnWarning = warnings.Add },
+            TestContext.Current.CancellationToken);
+
+        WorkbookWarning warning = Assert.Single(
+            warnings,
+            static candidate => candidate.Code == "ThreadedCommentsNotWritten");
+        Assert.Contains("2 threaded comment message", warning.Message, StringComparison.Ordinal);
+
+        buffer.Position = 0;
+        Workbook reloaded = await XlsWorkbook.LoadAsync(
+            buffer,
+            new XlsLoadOptions { LeaveOpen = true },
+            TestContext.Current.CancellationToken);
+        Assert.Empty(reloaded.Sheets[0].ThreadedComments);
+    }
+
+    [Fact]
     public async Task ANoteInAnotherAlphabetSurvives()
     {
         Workbook original = Workbook.Create();

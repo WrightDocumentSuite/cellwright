@@ -13,13 +13,22 @@ internal sealed class ConditionalRangeStatistics
 {
     private readonly double[] _sorted;
     private readonly Dictionary<string, int>? _occurrences;
+    private readonly ExcelDateSystem _system;
 
-    private ConditionalRangeStatistics(double[] sorted, Dictionary<string, int>? occurrences, double sum, double sumOfSquares)
+    private ConditionalRangeStatistics(
+        double[] sorted,
+        Dictionary<string, int>? occurrences,
+        double sum,
+        double sumOfSquares,
+        ExcelDateSystem system,
+        int occupiedSlotsInspected)
     {
         _sorted = sorted;
         _occurrences = occurrences;
+        _system = system;
         Sum = sum;
         SumOfSquares = sumOfSquares;
+        OccupiedSlotsInspected = occupiedSlotsInspected;
     }
 
     /// <summary>How many numbers the range holds.</summary>
@@ -36,6 +45,12 @@ internal sealed class ConditionalRangeStatistics
 
     /// <summary>The total of their squares, which is what the standard deviation is built from.</summary>
     public double SumOfSquares { get; }
+
+    /// <summary>
+    /// Number of occupied grid slots the sparse gather inspected. Exposed internally so regression
+    /// tests can enforce a narrow range walk without relying on wall-clock timing.
+    /// </summary>
+    internal int OccupiedSlotsInspected { get; }
 
     /// <summary>The mean, or zero when the range holds no numbers.</summary>
     public double Average => _sorted.Length == 0 ? 0 : Sum / _sorted.Length;
@@ -65,45 +80,83 @@ internal sealed class ConditionalRangeStatistics
     {
         var numbers = new List<double>();
         Dictionary<string, int>? occurrences = countOccurrences
-            ? new Dictionary<string, int>(StringComparer.Ordinal)
+            ? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
             : null;
 
         double sum = 0;
         double sumOfSquares = 0;
+        int occupiedSlotsInspected = 0;
 
+        if (ranges.Count == 0)
+            return new ConditionalRangeStatistics(
+                [], occurrences, sum, sumOfSquares, system, occupiedSlotsInspected);
+
+        // A conditional-format sqref can name tiny areas at opposite ends of the sheet. Walking
+        // their common bounding rectangle would inspect every occupied cell in the gap. Enumerate
+        // each area directly instead; when areas overlap, the coordinate set prevents a cell from
+        // contributing twice.
+        HashSet<CellRef>? visited = RangesOverlap(ranges) ? [] : null;
         foreach (RangeRef range in ranges)
         {
-            for (int row = range.Start.Row; row <= range.End.Row; row++)
+            foreach ((int row, int column, CellValue value) in sheet.Values.EnumerateOccupied(range))
             {
-                for (int column = range.Start.Column; column <= range.End.Column; column++)
+                occupiedSlotsInspected++;
+                if (visited is not null && !visited.Add(new CellRef(row, column)))
+                    continue;
+
+                if (occurrences is not null)
                 {
-                    CellValue value = sheet.Values.Get(row, column);
-
-                    if (occurrences is not null && !value.IsBlank)
-                    {
-                        string key = OccurrenceKey(value);
-                        occurrences[key] = occurrences.GetValueOrDefault(key) + 1;
-                    }
-
-                    if (!TryNumber(value, system, out double number))
-                        continue;
-
-                    numbers.Add(number);
-                    sum += number;
-                    sumOfSquares += number * number;
+                    string key = OccurrenceKey(value, system);
+                    occurrences[key] = occurrences.GetValueOrDefault(key) + 1;
                 }
+
+                if (!TryNumber(value, system, out double number))
+                    continue;
+
+                numbers.Add(number);
+                sum += number;
+                sumOfSquares += number * number;
             }
         }
 
         double[] sorted = [.. numbers];
         Array.Sort(sorted);
-        return new ConditionalRangeStatistics(sorted, occurrences, sum, sumOfSquares);
+        return new ConditionalRangeStatistics(
+            sorted, occurrences, sum, sumOfSquares, system, occupiedSlotsInspected);
+    }
+
+    /// <summary>
+    /// Whether any two areas can enumerate the same coordinate. Conditional-format references
+    /// normally contain only a handful of areas, so a pairwise scan is cheaper than allocating
+    /// and populating a coordinate set for every value in several disjoint dense ranges.
+    /// </summary>
+    private static bool RangesOverlap(IReadOnlyList<RangeRef> ranges)
+    {
+        // Pairwise geometry is allocation-free for the usual short sqref. Beyond this bound its
+        // quadratic work is worse than conservatively deduplicating the occupied cells: 10,000
+        // single-cell areas would otherwise perform about 50 million intersection checks.
+        const int PairwiseLimit = 128;
+        if (ranges.Count > PairwiseLimit)
+            return true;
+
+        for (int left = 0; left < ranges.Count - 1; left++)
+        {
+            for (int right = left + 1; right < ranges.Count; right++)
+            {
+                if (ranges[left].Intersects(ranges[right]))
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>How many times a value appears in the range.</summary>
     /// <param name="value">The value to count.</param>
     public int OccurrencesOf(in CellValue value) =>
-        value.IsBlank || _occurrences is null ? 0 : _occurrences.GetValueOrDefault(OccurrenceKey(value));
+        value.IsBlank || _occurrences is null
+            ? 0
+            : _occurrences.GetValueOrDefault(OccurrenceKey(value, _system));
 
     /// <summary>
     /// The value at a percentile, interpolating between neighbours as Excel's PERCENTILE does.
@@ -173,12 +226,34 @@ internal sealed class ConditionalRangeStatistics
     /// How a value is identified when counting repeats. Excel compares what it shows rather than
     /// how it is stored, so the number 1 and the text "1" are one value to a duplicate rule.
     /// </summary>
-    private static string OccurrenceKey(in CellValue value) => value.Kind switch
+    private static string OccurrenceKey(in CellValue value, ExcelDateSystem system)
     {
-        CellValueKind.Number => value.GetNumber().ToString("R", System.Globalization.CultureInfo.InvariantCulture),
-        CellValueKind.Text => value.GetText(),
-        CellValueKind.Boolean => value.GetBoolean() ? "TRUE" : "FALSE",
-        CellValueKind.Error => value.GetError().ToText(),
-        _ => string.Empty,
-    };
+        if (value.Kind is CellValueKind.Number or CellValueKind.DateTime or CellValueKind.TimeSpan)
+            return NumberKey(value.ToSerialNumber(system));
+
+        if (value.Kind == CellValueKind.Text)
+        {
+            // Excel compares numeric-looking text by its numeric value for duplicate/unique
+            // rules: the number 1, "1.00" and " 01 " are one occurrence.
+            string text = value.GetText();
+            return double.TryParse(
+                text,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out double number)
+                    ? NumberKey(number)
+                    : text;
+        }
+
+        return value.Kind switch
+        {
+            CellValueKind.Boolean => value.GetBoolean() ? "TRUE" : "FALSE",
+            CellValueKind.Error => value.GetError().ToText(),
+            _ => string.Empty,
+        };
+
+        static string NumberKey(double number) =>
+            (number == 0 ? 0 : number).ToString(
+                "R", System.Globalization.CultureInfo.InvariantCulture);
+    }
 }

@@ -51,6 +51,36 @@ public static class CalculationExtensions
             ArgumentException.ThrowIfNullOrWhiteSpace(formula);
             return GetEngine(sheet.Workbook).EvaluateAdHoc(formula, sheet, CellRef.Parse(originCell));
         }
+
+        /// <summary>
+        /// Evaluates <paramref name="formula"/> as if it had been copied from
+        /// <paramref name="sourceCell"/> to <paramref name="targetCell"/>. Relative reference
+        /// axes move with the copy; absolute axes stay fixed.
+        /// </summary>
+        /// <remarks>
+        /// The original text is compiled and cached once regardless of how many target cells are
+        /// evaluated. This is the suitable callback for conditional-format formulas over large
+        /// ranges.
+        /// </remarks>
+        public CellValue EvaluateCopied(
+            string formula, CellRef sourceCell, CellRef targetCell)
+        {
+            ArgumentNullException.ThrowIfNull(sheet);
+            ArgumentException.ThrowIfNullOrWhiteSpace(formula);
+            if (!sourceCell.IsValid)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(sourceCell), "The source cell must lie inside the worksheet grid.");
+            }
+            if (!targetCell.IsValid)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(targetCell), "The target cell must lie inside the worksheet grid.");
+            }
+
+            return GetEngine(sheet.Workbook).EvaluateAdHocCopied(
+                formula, sheet, sourceCell, targetCell);
+        }
     }
 
     extension(Cell cell)
@@ -75,4 +105,7 @@ public static class CalculationExtensions
 
     /// <summary>The workbook's range cache, so tests and benchmarks can see hits and misses.</summary>
     internal static RangeCache RangeCacheOf(Workbook workbook) => GetEngine(workbook).Ranges;
+
+    /// <summary>Compiled program count, exposed internally for cache-regression tests.</summary>
+    internal static int ProgramCountOf(Workbook workbook) => GetEngine(workbook).ProgramCount;
 }

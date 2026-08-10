@@ -50,6 +50,9 @@ internal static class Biff12RecordType
     public const int EndCellXFs = 618;
     public const int BeginCellStyleXFs = 626;
     public const int EndCellStyleXFs = 627;
+    public const int BeginDXFs = 505;
+    public const int EndDXFs = 506;
+    public const int Dxf = 507;
     public const int BeginStyleSheet = 278;
     public const int EndStyleSheet = 279;
 

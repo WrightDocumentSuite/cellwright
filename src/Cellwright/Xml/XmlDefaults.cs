@@ -29,4 +29,21 @@ internal static class XmlDefaults
         CloseInput = false,
         Async = true,
     };
+
+    /// <summary>Creates hardened settings with the caller's decoded-character ceiling.</summary>
+    public static XmlReaderSettings ForBudget(DocumentLoadBudget budget, bool async = false)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        return new XmlReaderSettings
+        {
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
+            IgnoreComments = true,
+            IgnoreProcessingInstructions = true,
+            IgnoreWhitespace = true,
+            CloseInput = false,
+            Async = async,
+            MaxCharactersInDocument = budget.MaxXmlCharactersPerPart,
+        };
+    }
 }

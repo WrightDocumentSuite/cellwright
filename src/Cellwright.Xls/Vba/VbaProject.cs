@@ -129,28 +129,48 @@ public sealed class VbaProject
     {
         ArgumentNullException.ThrowIfNull(stream);
         options ??= new XlsLoadOptions();
+        DocumentLoadBudget budget = options.EffectiveBudget;
+        var loadBudget = new DocumentLoadBudgetState(budget);
 
         // A package is read through the zip, one part of it: the project is a few kilobytes
         // even in a workbook of hundreds of megabytes. Only a compound file has to be held
         // whole, because its sectors are scattered and the directory indexes them by offset.
         if (await LooksLikePackageAsync(stream, cancellationToken).ConfigureAwait(false))
         {
-            byte[]? found = await ExtractPartAsync(stream, options.LeaveOpen, options.Limits, cancellationToken).ConfigureAwait(false);
+            byte[]? found = await ExtractPartAsync(
+                    stream, options.LeaveOpen, loadBudget, cancellationToken)
+                .ConfigureAwait(false);
             return found is null || !CompoundFile.HasSignature(found)
                 ? null
-                : Read(CompoundFile.Parse(found, options.Limits), Fallback(options));
+                : Read(
+                    CompoundFile.Parse(found, budget, loadBudget),
+                    Fallback(options),
+                    loadBudget,
+                    cancellationToken);
         }
 
-        byte[] bytes = await XlsWorkbook.ReadAllAsync(stream, options.LeaveOpen, options.Limits, cancellationToken).ConfigureAwait(false);
+        byte[] bytes = await XlsWorkbook.ReadAllAsync(stream, options.LeaveOpen, budget, cancellationToken).ConfigureAwait(false);
         if (CompoundFile.HasSignature(bytes))
-            return Read(CompoundFile.Parse(bytes, options.Limits), Fallback(options));
+        {
+            return Read(
+                CompoundFile.Parse(bytes, budget, loadBudget),
+                Fallback(options),
+                loadBudget,
+                cancellationToken);
+        }
 
         // Not seekable, so the signature could not be read ahead: the bytes are in hand now.
         using var package = new MemoryStream(bytes, writable: false);
-        byte[]? part = await ExtractPartAsync(package, leaveOpen: true, options.Limits, cancellationToken).ConfigureAwait(false);
+        byte[]? part = await ExtractPartAsync(
+                package, leaveOpen: true, loadBudget, cancellationToken)
+            .ConfigureAwait(false);
         return part is null || !CompoundFile.HasSignature(part)
             ? null
-            : Read(CompoundFile.Parse(part, options.Limits), Fallback(options));
+            : Read(
+                CompoundFile.Parse(part, budget, loadBudget),
+                Fallback(options),
+                loadBudget,
+                cancellationToken);
     }
 
     /// <summary>
@@ -182,9 +202,15 @@ public sealed class VbaProject
 
         byte[]? part = FindProjectPart(preserved);
         XlsLoadOptions effective = options ?? new XlsLoadOptions();
+        DocumentLoadBudget budget = effective.EffectiveBudget;
+        var loadBudget = new DocumentLoadBudgetState(budget);
         return part is null || !CompoundFile.HasSignature(part)
             ? null
-            : Read(CompoundFile.Parse(part, effective.Limits), Fallback(effective));
+            : Read(
+                CompoundFile.Parse(part, budget, loadBudget),
+                Fallback(effective),
+                loadBudget,
+                CancellationToken.None);
     }
 
     private static Encoding Fallback(XlsLoadOptions options) =>
@@ -212,12 +238,15 @@ public sealed class VbaProject
 
     /// <summary>Pulls the project part out of a package without building a workbook from it.</summary>
     private static async ValueTask<byte[]?> ExtractPartAsync(
-        Stream package, bool leaveOpen, PackageLimits limits, CancellationToken cancellationToken)
+        Stream package,
+        bool leaveOpen,
+        DocumentLoadBudgetState loadBudget,
+        CancellationToken cancellationToken)
     {
         OpcPackage opc;
         try
         {
-            opc = await OpcPackage.OpenReadAsync(package, leaveOpen, cancellationToken, limits).ConfigureAwait(false);
+            opc = await OpcPackage.OpenReadAsync(package, leaveOpen, cancellationToken, loadBudget).ConfigureAwait(false);
         }
         catch (InvalidDataException)
         {
@@ -241,7 +270,11 @@ public sealed class VbaProject
     /// Reads a project out of the container holding it. An .xls keeps one beside its workbook
     /// stream under a storage of its own; a package keeps the same thing as a whole part.
     /// </summary>
-    private static VbaProject? Read(CompoundFile container, Encoding fallback)
+    private static VbaProject? Read(
+        CompoundFile container,
+        Encoding fallback,
+        DocumentLoadBudgetState loadBudget,
+        CancellationToken cancellationToken)
     {
         string[] root =
             container.StorageExists(LegacyStorage) ? [LegacyStorage] :
@@ -253,13 +286,20 @@ public sealed class VbaProject
         if (container.TryReadPath([.. root, ModuleStorage, "dir"]) is not { Length: > 0 } packed)
             return null;
 
-        VbaDirectory.Contents directory = VbaDirectory.Parse(VbaCompression.Decompress(packed), fallback);
+        VbaDirectory.Contents directory = VbaDirectory.Parse(
+            VbaCompression.Decompress(
+                packed,
+                loadBudget,
+                cancellationToken),
+            fallback,
+            cancellationToken);
         Encoding text = VbaDirectory.Resolve(directory.CodePage, fallback);
         ProjectStreamContents declared = ReadProjectStream(container, root, text);
 
         List<VbaModule> modules = [];
         foreach (VbaModuleEntry entry in directory.Modules)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (container.TryReadPath([.. root, ModuleStorage, entry.StreamName]) is not { } stream ||
                 entry.SourceOffset >= stream.Length)
             {
@@ -268,7 +308,10 @@ public sealed class VbaProject
 
             // Everything before the offset is a cache the editor keeps for itself; the source
             // is the compressed container that follows it.
-            string code = text.GetString(VbaCompression.Decompress(stream.AsSpan(entry.SourceOffset)));
+            string code = text.GetString(VbaCompression.Decompress(
+                stream.AsSpan(entry.SourceOffset),
+                loadBudget,
+                cancellationToken));
             VbaModuleKind kind = entry.IsProcedural
                 ? VbaModuleKind.Procedural
                 : declared.Kinds.GetValueOrDefault(entry.Name, VbaModuleKind.Document);

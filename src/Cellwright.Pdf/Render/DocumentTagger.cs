@@ -84,5 +84,11 @@ internal sealed class DocumentTagger : ITagWriter
             tagger.Element(tag).AddContent(page.Id, mcid);
             return mcid;
         }
+
+        public void AddAnnotation(TagRef? tag, Inkwright.Annotations.PdfAnnotation annotation)
+        {
+            StructureElement parent = tag is null ? tagger._root : tagger.Element(tag);
+            parent.Add("Annot").AddAnnotation(annotation);
+        }
     }
 }

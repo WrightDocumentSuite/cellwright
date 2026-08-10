@@ -42,6 +42,23 @@ public sealed class DiagnosticsTests
     }
 
     [Fact]
+    public void AThreadedCommentIsSaidToBeLeftOut()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = Sheet(book);
+        Person person = book.People.Add("Reviewer");
+        ThreadedComment thread = sheet.ThreadedComments.Add(CellRef.Parse("A1"), "Check this", person);
+        sheet.ThreadedComments.Reply(thread, "Agreed", person);
+
+        using Rendered rendered = Rendered.Of(book);
+
+        Assert.Contains(
+            rendered.Diagnostics,
+            warning => warning.Kind == PdfExportWarningKind.ContentSkipped &&
+                warning.Subject == "threaded-comments");
+    }
+
+    [Fact]
     public void AConditionalFormatThatWasWorkedOutIsNotComplainedAbout()
     {
         Workbook book = Workbook.Create();

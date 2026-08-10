@@ -20,7 +20,7 @@ internal static class NameResolver
         if (context.NameDepth >= MaxNameDepth)
             return FormulaValue.Error(ExcelError.Reference);
 
-        FormulaProgram? program = context.GetProgram(defined.RefersTo);
+        FormulaProgram? program = context.GetNameProgram(defined.RefersTo);
         if (program is null)
             return FormulaValue.Error(ExcelError.Name);
 

@@ -65,10 +65,10 @@ public sealed class CompoundFileSafetyTests
             Limits = new PackageLimits { MaxPartSize = 1024, MaxTotalSize = 1024 },
         };
 
-        XlsFormatException failure = await Assert.ThrowsAsync<XlsFormatException>(async () =>
+        DocumentLoadLimitException failure = await Assert.ThrowsAsync<DocumentLoadLimitException>(async () =>
             await XlsWorkbook.LoadAsync(input, options, TestContext.Current.CancellationToken));
 
-        Assert.Contains("input limit", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(nameof(DocumentLoadBudget.MaxInputBytes), failure.LimitName);
     }
 
     private static byte[] Container(ushort majorVersion, int sectorSize, int sectorCount)

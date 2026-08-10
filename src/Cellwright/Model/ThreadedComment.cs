@@ -12,6 +12,9 @@ namespace Cellwright;
 /// <param name="ProviderId">Which kind of account the identifier belongs to, e.g. <c>None</c> or <c>AD</c>.</param>
 public sealed record Person(string Id, string DisplayName, string? UserId = null, string? ProviderId = null)
 {
+    /// <summary>Extension markup carried through for providers the model does not understand.</summary>
+    internal string? ExtensionListXml { get; init; }
+
     /// <summary>A person known only by name, with an identifier made up for them.</summary>
     /// <param name="displayName">The name to show.</param>
     public static Person Named(string displayName)
@@ -39,6 +42,9 @@ public sealed class PersonCollection : IReadOnlyList<Person>
 
     /// <summary>Whether the model, rather than the loaded file, owns the list.</summary>
     internal bool IsModified { get; private set; }
+
+    /// <summary>Extension markup attached to the person list itself.</summary>
+    internal string? ExtensionListXml { get; set; }
 
     /// <summary>The person with an identifier, or <see langword="null"/>.</summary>
     /// <param name="id">The identifier a comment names.</param>
@@ -77,6 +83,18 @@ public sealed class PersonCollection : IReadOnlyList<Person>
     /// <summary>Adds a person read from a file without marking the list as edited.</summary>
     internal void AddFromFile(Person person) => _people.Add(person);
 
+    /// <summary>Whether this exact person object came from this collection.</summary>
+    internal bool Owns(Person person)
+    {
+        foreach (Person existing in _people)
+        {
+            if (ReferenceEquals(existing, person))
+                return true;
+        }
+
+        return false;
+    }
+
     /// <summary>Marks the list as owned by the model.</summary>
     internal void MarkModified() => IsModified = true;
 
@@ -98,12 +116,50 @@ public sealed class PersonCollection : IReadOnlyList<Person>
 public sealed class ThreadedComment
 {
     private readonly List<ThreadedComment> _replies = [];
+    private ThreadedCommentCollection? _owner;
+    private CellRef _cell;
+    private string _text = null!;
+    private bool _resolved;
+
+    /// <summary>The original mentions element, including ranges and person identifiers.</summary>
+    internal string? MentionsXml { get; set; }
+
+    /// <summary>Extension markup attached to this message.</summary>
+    internal string? ExtensionListXml { get; set; }
 
     /// <summary>Cell the thread is anchored to.</summary>
-    public required CellRef Cell { get; set; }
+    public required CellRef Cell
+    {
+        get => _cell;
+        set
+        {
+            if (_cell == value)
+                return;
+
+            _cell = value;
+            _owner?.MarkModified();
+        }
+    }
 
     /// <summary>What this message says.</summary>
-    public required string Text { get; set; }
+    public required string Text
+    {
+        get => _text;
+        set
+        {
+            if (string.Equals(_text, value, StringComparison.Ordinal))
+                return;
+
+            _text = value;
+            bool droppedMentions = MentionsXml is not null;
+            bool droppedExtensions = ExtensionListXml is not null;
+            MentionsXml = null;
+            ExtensionListXml = null;
+            _owner?.MarkModified();
+            if (droppedMentions || droppedExtensions)
+                _owner?.ReportTextMetadataDropped(this, droppedMentions, droppedExtensions);
+        }
+    }
 
     /// <summary>Identifier of the person who wrote it.</summary>
     public required string PersonId { get; init; }
@@ -117,8 +173,19 @@ public sealed class ThreadedComment
     /// <summary>When it was written, in UTC.</summary>
     public DateTimeOffset? Created { get; init; }
 
-    /// <summary>Whether the thread has been marked resolved. Only meaningful on a first message.</summary>
-    public bool Resolved { get; set; }
+    /// <summary>Whether this message has been marked resolved.</summary>
+    public bool Resolved
+    {
+        get => _resolved;
+        set
+        {
+            if (_resolved == value)
+                return;
+
+            _resolved = value;
+            _owner?.MarkModified();
+        }
+    }
 
     /// <summary>The replies to this message, in the order they were written.</summary>
     public IReadOnlyList<ThreadedComment> Replies => _replies;
@@ -126,8 +193,39 @@ public sealed class ThreadedComment
     /// <summary>Whether this message starts a thread rather than answering one.</summary>
     public bool IsFirst => ParentId is null;
 
+    /// <summary>
+    /// Whether this loaded message carries mentions or extension markup that Cellwright keeps
+    /// opaquely rather than interpreting.
+    /// </summary>
+    public bool HasOpaqueMetadata => MentionsXml is not null || ExtensionListXml is not null;
+
+    /// <summary>
+    /// Discards preserved mentions and message extension markup explicitly. Use this before a
+    /// lower-level rewrite when those ranges or checksums are no longer valid. Changing
+    /// <see cref="Text"/> performs the same safe drop automatically and emits a warning.
+    /// </summary>
+    /// <returns>Whether anything was cleared.</returns>
+    public bool ClearOpaqueMetadata()
+    {
+        bool cleared = HasOpaqueMetadata;
+        MentionsXml = null;
+        ExtensionListXml = null;
+        if (cleared)
+            _owner?.MarkModified();
+        return cleared;
+    }
+
     /// <summary>Attaches a reply, which the collection does while building the tree.</summary>
     internal void AddReply(ThreadedComment reply) => _replies.Add(reply);
+
+    /// <summary>Clears the projected reply tree before it is rebuilt from the flat list.</summary>
+    internal void ClearReplies() => _replies.Clear();
+
+    /// <summary>Attaches this message to the collection that owns its serialized state.</summary>
+    internal void Attach(ThreadedCommentCollection? owner) => _owner = owner;
+
+    /// <summary>Whether this exact message belongs to a collection.</summary>
+    internal bool IsOwnedBy(ThreadedCommentCollection owner) => ReferenceEquals(_owner, owner);
 
     /// <inheritdoc/>
     public override string ToString() => $"{Cell}: {Text}";
@@ -143,6 +241,15 @@ public sealed class ThreadedComment
 public sealed class ThreadedCommentCollection : IReadOnlyList<ThreadedComment>
 {
     private readonly List<ThreadedComment> _comments = [];
+    private readonly Worksheet? _worksheet;
+
+    /// <summary>Creates a detached collection. Worksheet collections are created by <see cref="Worksheet"/>.</summary>
+    public ThreadedCommentCollection()
+    {
+    }
+
+    /// <summary>Creates the collection owned by a worksheet.</summary>
+    internal ThreadedCommentCollection(Worksheet worksheet) => _worksheet = worksheet;
 
     /// <inheritdoc/>
     public int Count => _comments.Count;
@@ -153,6 +260,9 @@ public sealed class ThreadedCommentCollection : IReadOnlyList<ThreadedComment>
     /// <summary>Whether the model, rather than the loaded file, owns the comments.</summary>
     internal bool IsModified { get; private set; }
 
+    /// <summary>Extension markup attached to the threaded-comments list itself.</summary>
+    internal string? ExtensionListXml { get; set; }
+
     /// <summary>
     /// The first message of every thread, each carrying its replies. A reply whose parent is not
     /// in the sheet is treated as starting a thread of its own rather than dropped.
@@ -161,15 +271,21 @@ public sealed class ThreadedCommentCollection : IReadOnlyList<ThreadedComment>
     {
         get
         {
-            var byId = new Dictionary<string, ThreadedComment>(StringComparer.OrdinalIgnoreCase);
-            foreach (ThreadedComment comment in _comments)
-                byId[comment.Id] = comment;
+            Projection projection = BuildProjection();
 
             var roots = new List<ThreadedComment>();
-            foreach (ThreadedComment comment in _comments)
+            for (int i = 0; i < _comments.Count; i++)
             {
-                if (comment.ParentId is { } parent && byId.TryGetValue(parent, out ThreadedComment? owner))
-                    owner.AddReply(comment);
+                ThreadedComment comment = _comments[i];
+                comment.ClearReplies();
+            }
+
+            for (int i = 0; i < _comments.Count; i++)
+            {
+                ThreadedComment comment = _comments[i];
+                int parent = projection.Parents[i];
+                if (parent >= 0 && !projection.InCycle[i])
+                    _comments[parent].AddReply(comment);
                 else
                     roots.Add(comment);
             }
@@ -200,6 +316,7 @@ public sealed class ThreadedCommentCollection : IReadOnlyList<ThreadedComment>
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(author);
+        ValidateAuthor(author);
 
         var comment = new ThreadedComment
         {
@@ -209,6 +326,7 @@ public sealed class ThreadedCommentCollection : IReadOnlyList<ThreadedComment>
             Created = DateTimeOffset.UtcNow,
         };
 
+        comment.Attach(this);
         _comments.Add(comment);
         IsModified = true;
         return comment;
@@ -223,6 +341,9 @@ public sealed class ThreadedCommentCollection : IReadOnlyList<ThreadedComment>
         ArgumentNullException.ThrowIfNull(parent);
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(author);
+        if (!parent.IsOwnedBy(this))
+            throw new ArgumentException("The parent comment does not belong to this worksheet's collection.", nameof(parent));
+        ValidateAuthor(author);
 
         // A reply answers the first message of the thread, never another reply: the format has
         // one level, and Excel shows a flat conversation.
@@ -237,6 +358,7 @@ public sealed class ThreadedCommentCollection : IReadOnlyList<ThreadedComment>
             Created = DateTimeOffset.UtcNow,
         };
 
+        reply.Attach(this);
         _comments.Add(reply);
         IsModified = true;
         return reply;
@@ -249,8 +371,18 @@ public sealed class ThreadedCommentCollection : IReadOnlyList<ThreadedComment>
         ArgumentNullException.ThrowIfNull(comment);
 
         bool removed = _comments.Remove(comment);
+        if (removed)
+            comment.Attach(null);
+
         if (removed && comment.IsFirst)
-            _comments.RemoveAll(other => string.Equals(other.ParentId, comment.Id, StringComparison.OrdinalIgnoreCase));
+        {
+            foreach (ThreadedComment reply in _comments.Where(
+                other => string.Equals(other.ParentId, comment.Id, StringComparison.OrdinalIgnoreCase)).ToArray())
+            {
+                _comments.Remove(reply);
+                reply.Attach(null);
+            }
+        }
 
         IsModified |= removed;
         return removed;
@@ -260,37 +392,210 @@ public sealed class ThreadedCommentCollection : IReadOnlyList<ThreadedComment>
     /// <param name="cell">The cell to clear.</param>
     public bool RemoveAt(CellRef cell)
     {
-        int removed = _comments.RemoveAll(comment => comment.Cell == cell);
+        ThreadedComment[] matches = [.. _comments.Where(comment => comment.Cell == cell)];
+        foreach (ThreadedComment comment in matches)
+        {
+            _comments.Remove(comment);
+            comment.Attach(null);
+        }
+
+        int removed = matches.Length;
         IsModified |= removed > 0;
         return removed > 0;
     }
 
     /// <summary>Adds a message read from a file without marking the collection as edited.</summary>
-    internal void AddFromFile(ThreadedComment comment) => _comments.Add(comment);
+    internal void AddFromFile(ThreadedComment comment)
+    {
+        comment.Attach(this);
+        _comments.Add(comment);
+    }
+
+    /// <summary>Adds reconciled messages and makes their new owning part authoritative.</summary>
+    internal void AddReconciled(IEnumerable<ThreadedComment> comments)
+    {
+        foreach (ThreadedComment comment in comments)
+        {
+            comment.Attach(this);
+            _comments.Add(comment);
+        }
+
+        IsModified = true;
+    }
+
+    /// <summary>Detaches a projected conversation during workbook-wide reconciliation.</summary>
+    internal void RemoveReconciled(IReadOnlyCollection<ThreadedComment> comments)
+    {
+        if (comments.Count == 0)
+            return;
+
+        var removed = new HashSet<ThreadedComment>(comments);
+        for (int i = _comments.Count - 1; i >= 0; i--)
+        {
+            ThreadedComment comment = _comments[i];
+            if (!removed.Contains(comment))
+                continue;
+
+            _comments.RemoveAt(i);
+            comment.Attach(null);
+        }
+
+        IsModified = true;
+    }
 
     /// <summary>Marks the collection as owned by the model, e.g. after a structural edit.</summary>
     internal void MarkModified() => IsModified = true;
 
+    /// <summary>Reports malformed imported links once, while load diagnostics are being built.</summary>
+    internal void ReportTopologyWarnings(string sheetName, Action<WorkbookWarning> warn)
+    {
+        Projection projection = BuildProjection();
+        if (projection.DuplicateIds > 0)
+        {
+            warn(new WorkbookWarning(
+                "DuplicateThreadedCommentId",
+                $"The threaded comments of sheet '{sheetName}' contain {projection.DuplicateIds} duplicate message " +
+                "identifier(s). The first message with each identifier owns replies in the projected conversation."));
+        }
+
+        if (projection.MissingParents > 0)
+        {
+            warn(new WorkbookWarning(
+                "MissingThreadedCommentParent",
+                $"The threaded comments of sheet '{sheetName}' contain {projection.MissingParents} reply link(s) " +
+                "whose parent is absent. Those messages are projected as thread roots."));
+        }
+
+        int cyclic = 0;
+        foreach (bool inCycle in projection.InCycle)
+            cyclic += inCycle ? 1 : 0;
+        if (cyclic > 0)
+        {
+            warn(new WorkbookWarning(
+                "ThreadedCommentParentCycle",
+                $"The threaded comments of sheet '{sheetName}' contain {cyclic} message(s) in parent cycles. " +
+                "Cycle members are projected as thread roots."));
+        }
+    }
+
+    /// <summary>Emits the edit diagnostic after stale text-relative markup has been discarded.</summary>
+    internal void ReportTextMetadataDropped(
+        ThreadedComment comment, bool droppedMentions, bool droppedExtensions)
+    {
+        if (_worksheet is null)
+            return;
+
+        string what = droppedMentions && droppedExtensions
+            ? "mentions and extension markup"
+            : droppedMentions ? "mentions" : "extension markup";
+        _worksheet.Workbook.OnWarning?.Invoke(new WorkbookWarning(
+            "ThreadedCommentTextMetadataDropped",
+            $"Changing threaded-comment text on sheet '{_worksheet.Name}' discarded its opaque {what}; " +
+            "their text ranges and checksums cannot be rebased safely.",
+            comment.Cell));
+    }
+
     /// <summary>Moves every message to the cell the mapping gives it, dropping the rest.</summary>
+    /// <remarks>
+    /// The collection stays unmodified when the mapping leaves every anchor alone. Preserving
+    /// that copy-on-write state avoids rewriting the part. Loaded mentions and extension markup
+    /// are also carried through when a rewrite is necessary.
+    /// </remarks>
     internal void Reanchor(Func<CellRef, CellRef?> map)
     {
         if (_comments.Count == 0)
             return;
 
-        var kept = new List<ThreadedComment>(_comments.Count);
-        foreach (ThreadedComment comment in _comments)
+        bool removed = false;
+        for (int i = _comments.Count - 1; i >= 0; i--)
         {
+            ThreadedComment comment = _comments[i];
             if (map(comment.Cell) is not { } cell)
+            {
+                _comments.RemoveAt(i);
+                comment.Attach(null);
+                removed = true;
                 continue;
+            }
 
             comment.Cell = cell;
-            kept.Add(comment);
         }
 
-        _comments.Clear();
-        _comments.AddRange(kept);
-        IsModified = true;
+        IsModified |= removed;
     }
+
+    private void ValidateAuthor(Person author)
+    {
+        if (_worksheet is null)
+            return;
+        if (!_worksheet.Workbook.People.Owns(author))
+            throw new ArgumentException("The author must belong to this worksheet's workbook.", nameof(author));
+    }
+
+    /// <summary>
+    /// Resolves parent identifiers without recursion. Duplicate identifiers use the first
+    /// message in file order; missing links and every member of a cycle become roots.
+    /// </summary>
+    private Projection BuildProjection()
+    {
+        int count = _comments.Count;
+        var byId = new Dictionary<string, int>(count, StringComparer.OrdinalIgnoreCase);
+        int duplicates = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (!byId.TryAdd(_comments[i].Id, i))
+                duplicates++;
+        }
+
+        var parents = new int[count];
+        Array.Fill(parents, -1);
+        int missingParents = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (_comments[i].ParentId is not { Length: > 0 } parentId)
+                continue;
+
+            if (byId.TryGetValue(parentId, out int parent))
+                parents[i] = parent;
+            else
+                missingParents++;
+        }
+
+        var inCycle = new bool[count];
+        var state = new byte[count];
+        var path = new List<int>();
+        for (int start = 0; start < count; start++)
+        {
+            if (state[start] != 0)
+                continue;
+
+            path.Clear();
+            int current = start;
+            while (current >= 0 && state[current] == 0)
+            {
+                state[current] = 1;
+                path.Add(current);
+                current = parents[current];
+            }
+
+            if (current >= 0 && state[current] == 1)
+            {
+                int cycleStart = path.Count - 1;
+                while (path[cycleStart] != current)
+                    cycleStart--;
+                for (int i = cycleStart; i < path.Count; i++)
+                    inCycle[path[i]] = true;
+            }
+
+            foreach (int comment in path)
+                state[comment] = 2;
+        }
+
+        return new Projection(parents, inCycle, duplicates, missingParents);
+    }
+
+    private readonly record struct Projection(
+        int[] Parents, bool[] InCycle, int DuplicateIds, int MissingParents);
 
     /// <inheritdoc/>
     public IEnumerator<ThreadedComment> GetEnumerator() => _comments.GetEnumerator();

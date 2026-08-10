@@ -313,7 +313,7 @@ internal static class LookupFunctions
 
         // Parsed once per distinct target text: an INDIRECT filled down a column repeats the
         // same handful of strings on every row.
-        Parsing.FormulaProgram? program = context.GetProgram(text);
+        Parsing.FormulaProgram? program = context.GetDynamicProgram(text);
         if (program is null)
             return FormulaValue.Error(ExcelError.Reference);
 

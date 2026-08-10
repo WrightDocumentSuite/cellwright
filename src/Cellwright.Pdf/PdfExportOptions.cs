@@ -50,25 +50,47 @@ public sealed class PdfExportOptions
     public CultureInfo Culture { get; set; } = CultureInfo.InvariantCulture;
 
     /// <summary>
-    /// How to work out a conditional formatting rule whose condition is a formula, or
-    /// <see langword="null"/> to leave such rules unapplied and report them.
+    /// Legacy formula evaluator for a conditional formatting rule whose condition is a formula,
+    /// or <see langword="null"/> to leave such rules unapplied and report them. Prefer
+    /// <see cref="RelativeFormulaEvaluator"/> when the formula engine supports copied formulas.
     /// </summary>
     /// <remarks>
     /// Nearly every kind of rule is decided from the values alone and needs nothing here: the
-    /// comparisons against literals, the text tests, the ranks, the averages, the colour scales,
-    /// the bars and the icons are all applied whether or not this is set. Only a rule holding a
-    /// real formula needs an engine, and this package deliberately does not depend on one — a
-    /// caller that wants those rules applied says so by handing the engine over:
+    /// comparisons against literals, the text tests, the ranks, the averages, and graded rules
+    /// without an activity formula are all applied whether or not this is set. Only a rule holding
+    /// a real formula needs an engine, and this package deliberately does not depend on one — a
+    /// caller that wants those rules applied says so by handing the engine over through
+    /// <see cref="RelativeFormulaEvaluator"/>:
     /// <code>
-    /// options.FormulaEvaluator = (sheet, cell, formula) =&gt; sheet.Evaluate(formula, cell.ToString());
+    /// options.RelativeFormulaEvaluator =
+    ///     (sheet, anchor, cell, formula) =&gt; sheet.EvaluateCopied(formula, anchor, cell);
     /// </code>
-    /// which needs the <c>Cellwright.Formulas</c> package. Left unset, such a rule is reported as
+    /// This requires the <c>Cellwright.Formulas</c> package. Left unset, such a rule is reported as
     /// <c>conditional-format-formula</c> rather than quietly treated as false.
     /// </remarks>
     public Func<Worksheet, CellRef, string, CellValue>? FormulaEvaluator { get; set; }
 
+    /// <summary>
+    /// Cache-stable formula evaluator that receives the rule anchor and the target cell separately,
+    /// or <see langword="null"/> to fall back to <see cref="FormulaEvaluator"/>.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="FormulaEvaluator"/>, the formula text is not rewritten for every cell.
+    /// <c>Worksheet.EvaluateCopied</c> can therefore compile one program for a large range and
+    /// apply only a row/column delta while executing it, without creating translated formula text
+    /// for every target cell.
+    /// </remarks>
+    public Func<Worksheet, CellRef, CellRef, string, CellValue>? RelativeFormulaEvaluator { get; set; }
+
     /// <summary>Whether the structure tree is built, which is what a screen reader follows.</summary>
     public bool Tagged { get; set; }
+
+    /// <summary>
+    /// Whether classic notes and threaded comments become interactive PDF note annotations.
+    /// The default leaves them out, matching an ordinary print. Replies, known authors and
+    /// recorded dates are retained; no missing author, time or resolver provenance is invented.
+    /// </summary>
+    public bool IncludeComments { get; set; }
 
     /// <summary>
     /// The language of the document, as a BCP 47 tag. Only meaningful when

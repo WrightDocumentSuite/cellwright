@@ -77,6 +77,13 @@ options.FontFiles["Calibri"] = "/srv/fonts/Carlito-Regular.ttf";
 options.FontFiles["Calibri Bold"] = "/srv/fonts/Carlito-Bold.ttf";
 ```
 
+System lookup reads the family, PostScript name, weight, and italic angle from the font file.
+Consequently Office/PDF aliases and subset-prefixed names resolve independently of platform file
+names such as Windows' `times.ttf`; regular, bold, italic, and bold-italic cells keep distinct faces
+and their corresponding Excel print metrics. A Windows compatibility fallback for `times*.ttf`,
+`cour*.ttf`, and `arial*.ttf` keeps this behaviour when Cellwright is consumed with an older pinned
+Inkwright package.
+
 ## AutoFit
 
 Only something that knows how wide text is can fit a column to it — and that is the font. AutoFit
@@ -143,37 +150,53 @@ top/bottom percent, above/below average with deviations, all ten date periods fr
 scales, data bars, and icon sets. That is exactly what is decided from values, and print values are
 enough.
 
-A formula is needed only for “expression” rules and comparisons whose operand is not a literal.
-The print package deliberately does not depend on `Cellwright.Formulas`, so the engine is passed in
-from outside:
+A formula engine is needed for “expression” rules, comparisons whose operand is not a literal,
+formula-valued graded thresholds, and an activity condition attached to a color scale, bar, or icon
+set. The print package deliberately does not depend on `Cellwright.Formulas`, so the engine is
+passed in from outside:
 
 ```csharp
 var options = new PdfExportOptions
 {
-    FormulaEvaluator = (sheet, cell, formula) => sheet.Evaluate(formula, cell.ToString()),
+    RelativeFormulaEvaluator = (sheet, anchor, cell, formula) =>
+        sheet.EvaluateCopied(formula, anchor, cell),
 };
 
 book.SaveAsPdf("report.pdf", options);
 ```
 
+The copy-aware callback receives both the top-left cell of the rule's first range and the cell being
+printed. `EvaluateCopied` compiles the stored formula text once and applies the relative row/column
+offset while it runs, so `$D2`, `ROW()`, and `COLUMN()` retain Excel semantics without retaining one
+translated program per target cell. The older `FormulaEvaluator` property remains available for
+custom engines; it receives already-translated text and the target cell. The built-in
+`EvaluateCopied` callback begins an independent formula pass per target, so volatile `NOW()` and
+`TODAY()` are not frozen across the entire render; callers that require one shared volatile
+timestamp must provide an engine callback with its own render-scoped session.
+
 Without this, such a rule **is not applied and goes into diagnostics** with code
 `conditional-format-formula`. Treating it as false silently is not allowed: an uncolored cell would
 look like a deliberate author choice, not something print could not do.
 
-How rules stack: by ascending `Priority`, each next rule overrides the previous only where it says
-something — a rule that sets only fill leaves the font chosen earlier. `StopIfTrue` stops the walk.
+How rules stack: by ascending `Priority`; the first matching rule has the highest priority and owns
+every property it states. Lower-priority rules can still fill properties it left unstated — a rule
+that sets only fill does not prevent a later rule from setting the font. `StopIfTrue` stops the walk.
 Differential format replaces fill entirely, not blended: it names a solid color, so the cell’s own
 pattern or gradient steps aside for the rule — as in Excel.
+Border edges participate independently, so a higher-priority left edge and a lower-priority right
+edge both appear. The current border model has no per-edge presence bit: `None` is treated as an
+unspecified edge while rules are combined and therefore cannot explicitly clear one edge.
 
 What is drawn, not just computed:
 
 - **Color scale** replaces cell fill: it grades the cell itself, not a layer on top.
-- **Data bar** — a bar from the left edge, as long a fraction of the cell as the value is of the
-  range.
+- **Data bar** — a bar from the left edge, interpolated between `MinimumLength` and `MaximumLength`
+  as the value moves through the range. Their SpreadsheetML defaults are 10% and 90%.
 - **Icon sets** are drawn vectorially, not as symbol-font glyphs: the font with the right glyphs is
-  not on every machine, and a missing glyph is empty space where the sheet says something. The format
-  names seventeen sets (`ST_IconSetType`); this renderer draws them with a family of shapes — circle,
-  arrow, flag, triangle, diamond, check/cross/exclamation, scale, and circle fractions.
+  not on every machine, and a missing glyph is empty space where the sheet says something. The base
+  format names seventeen sets; the x14 extension adds `3Stars`, `3Triangles`, and `5Boxes`. This
+  renderer draws them with a family of shapes — circle, arrow, flag, triangle, star, boxes, diamond,
+  check/cross/exclamation, scale, and circle fractions.
   An unknown set goes into diagnostics as `icon-set-<name>`, not drawn at random.
 - `ShowValue = false` on an icon or data bar removes the number itself, leaving only the graphic.
 - The icon takes space on the left; text starts after it, not under it.
@@ -181,13 +204,17 @@ What is drawn, not just computed:
 A rule that changes font or number format participates in measurement too: a wrapped row grows for
 the text that will be drawn, not the text without the rule.
 
-A rule the model does not represent (for example with x14 extensions) is carried through the file
-verbatim, but print has nothing to apply — `conditional-format-opaque`.
+A priority-bearing, non-custom x14 icon-set rule named `3Stars`, `3Triangles`, or `5Boxes` is
+evaluated through an internal read-only projection while its source `extLst` remains authoritative
+for saving. Custom `cfIcon` mixtures, x14 data-bar companions, and other rules the model does not
+represent have nothing safe to apply and remain `conditional-format-opaque`.
 
-**Cost.** On a 20,000×5 sheet with two comparison rules — 1.66× the time of a sheet without rules;
-with a color scale and data bar — 1.77×. Range statistics (min, max, percentiles, average, duplicate
-counts) are taken once per rule, not per cell; otherwise a column of a thousand values would be
-quadratic. Format overlay on style is cached by the pair “style + format”: few pairs, many cells.
+**Cost.** Against the same styled 20,000×5 sheet, two comparison rules take 1.06× as long; a color
+scale and data bar take 1.27×. Range statistics (min, max, percentiles, average, duplicate counts)
+are taken once per rule and walk only occupied cells in the rule's range; overlapping range
+references count a cell once. Format overlay on style is cached by the pair “style + format”: few
+pairs, many cells. Formula-valued graded thresholds are evaluated once per rule/threshold, not once
+per rendered cell.
 
 ## What prints
 
@@ -247,6 +274,42 @@ clipped. Hidden pictures are not drawn; formats that cannot embed go into diagno
 centering are baked into its rectangle: the area stays over its cell at any `Scale` and
 `CenterHorizontally`.
 
+## Interactive comments
+
+An ordinary export still behaves like printing: classic notes and threaded review conversations
+are omitted and reported as `comment` / `threaded-comments`. Opt in when the PDF should remain a
+review document:
+
+```csharp
+var options = new PdfExportOptions { IncludeComments = true };
+book.SaveAsPdf("review.pdf", options);
+```
+
+Every classic note and threaded root becomes a compact sticky-note annotation centred on the
+top-right endpoint of the cell rectangle that was actually printed. A threaded reply becomes a PDF
+reply through `/IRT`; the text, known workbook person, nullable UTC creation time and durable
+threaded identifier are retained. A classic note has no source timestamp, so its PDF `/CreationDate`
+and `/M` are absent rather than set to the export time. Several notes can share a cell, and a
+repeated print-title cell emits its thread only once.
+
+The icon is viewer content of a fixed size, not part of the grid's measured content. Enabling it
+therefore changes neither cell layout nor page count. A comment outside the print rectangle, on a
+hidden row/column, or on a swallowed non-anchor cell of a merge is not moved to a plausible-looking
+place: it is omitted with `comment-anchors` or `comment-hidden`. Missing/ambiguous parents, cycles,
+duplicate identifiers and cross-cell replies are handled without recursion and reported as
+`comment-thread-dangling` / `comment-thread-malformed`; an unknown person leaves the PDF author
+empty and produces `comment-authors`.
+
+Excel records a resolved flag on each threaded message but not who resolved it or when. PDF review
+`/State` requires the responsible user in `/T`, so the exporter does not fabricate an identity or
+write an anonymous machine-readable `Completed` state. For every resolved source message it appends
+an ordinary authorless, timeless informational reply to that message, with no `/State` or
+`/StateModel`, and reports `comment-resolved-state`.
+
+Mention ranges and opaque `extLst` markup on messages, collections, people and the person list have
+no PDF annotation equivalent. Their aggregate counts are reported as `comment-metadata`; the opaque
+XML itself is never copied into diagnostics.
+
 ## Tagged PDF
 
 `PdfExportOptions.Tagged` builds a structure tree during draw:
@@ -258,10 +321,15 @@ centering are baked into its rectangle: the area stays over its cell at any `Sca
 | Cell | `TD` |
 | Repeating header row cell | `TH` with Scope=Column |
 | Picture | `Figure`, description goes in `/Alt` |
+| Interactive note or reply | `Annot` with an `OBJR` |
 
 Fills, grid, and borders are marked as artifacts, so every mark on the page either belongs to the
 tree or states honestly that it belongs to no one. Document language comes from
 `PdfExportOptions.Language`; a book with a title asks readers to show it instead of the file name.
+Each interactive note and reply is inserted directly after its cell content in reading order. Its
+`Annot` element owns the annotation through `OBJR`, while `StructParent` and `ParentTree` provide the
+reverse link; pages carrying comments use structure tab order (`/Tabs /S`). Pop-up helper windows
+are deliberately not structure content.
 
 ## What is not supported
 
@@ -272,7 +340,8 @@ draft mode give one warning, not three.
 - **Pivot tables.** In the book they round-trip through the file as-is, but print cannot draw them.
 - **Chart straddling a page break** (`chart-split`) is not drawn: half a chart reads as a chart.
   Kinds the renderer does not know (`chart-Unknown`) are skipped with diagnostics.
-- **Notes and comments** (`comment`) on print.
+- **Classic notes** (`comment`) and **threaded comments with replies** (`threaded-comments`) in the
+  default print-like mode; set `IncludeComments` for interactive annotations.
 - **Row and column headings** (`print-headings`) when the sheet asks to print them.
 - **Pattern fills** (`pattern-fill`) draw as the pattern’s solid color.
 - **Intermediate rotation angles** (`rotation`) round to the nearest quarter turn.
@@ -287,19 +356,24 @@ draft mode give one warning, not three.
 
 ## Cost
 
-BenchmarkDotNet 0.15.8, .NET 10, Windows Server 2022, Intel Core i7-8700; a 20,000-row sheet over
-5 columns — 100,000 cells, 445 pages:
+BenchmarkDotNet 0.15.8, .NET 10.0.10, Windows Server 2022, Intel Core i7-8700; a 20,000-row sheet
+over 5 columns — 100,000 cells and 445 pages. Measured 2026-08-01 with SDK 10.0.302:
 
-| | Mean | Allocations |
+| Scenario | Mean | Allocations |
 | --- | ---: | ---: |
-| No styles | 827 ms | 106 MB |
-| With number formats | 1,014 ms | 125 MB |
-| Same, with structure tree | 1,728 ms | 333 MB |
+| No styles | 533.81 ms | 106.57 MB |
+| Sparse print area, one occupied cell | 23.64 ms | 6.32 MB |
+| With number formats | 642.05 ms | 124.72 MB |
+| Same, with structure tree | 1,147.01 ms | 402.46 MB |
+| Two comparison rules | 682.43 ms | 191.63 MB |
+| Color scale and data bar | 816.88 ms | 203.65 MB |
 
-Under ten microseconds per cell; number formats add roughly a fifth; the structure tree another
-two-thirds and triple the memory, because every cell becomes an element. The main cost is
-measurement, not output: every cell width is computed from real font metrics, and a number is
-formatted before that.
+The sparse case still creates all 445 pages named by `PrintArea`; it only avoids measuring and
+painting default-blank cells. Before that fast path the same benchmark took 54.96 ms, versus
+23.64 ms now (2.32× faster), with the same 6.32 MB of allocations. Number formats add roughly a
+fifth to a dense sheet. Tagged output costs more because every cell becomes a structure element.
+The main dense-sheet cost is measurement: every cell width is computed from real font metrics, and
+a number is formatted before that.
 
 ```bash
 dotnet run -c Release --project benchmarks/Cellwright.Benchmarks -- --filter *PdfBenchmarks*

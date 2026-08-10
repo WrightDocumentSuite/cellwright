@@ -8,14 +8,24 @@ namespace Cellwright.Xls.Xlsb;
 /// </summary>
 internal static class XlsbStringTable
 {
-    public static void Read(byte[] part, XlsGlobals globals)
+    public static void Read(
+        byte[] part,
+        XlsGlobals globals,
+        DocumentLoadBudgetState? loadBudget = null,
+        CancellationToken cancellationToken = default)
     {
         var strings = new List<string>();
         var reader = new Biff12Reader(part);
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (reader.RecordType == Biff12RecordType.SstItem)
-                strings.Add(ReadRichString(reader.Record));
+            {
+                loadBudget?.AddSharedString();
+                string text = ReadRichString(reader.Record, loadBudget);
+                loadBudget?.AddCellText(text);
+                strings.Add(text);
+            }
         }
 
         globals.SharedStrings = [.. strings];
@@ -26,12 +36,14 @@ internal static class XlsbStringTable
     /// of formatting over it. The runs are skipped — the model holds one style per cell, so a
     /// string formatted in pieces arrives as plain text, as it does from xlsx and xls.
     /// </summary>
-    public static string ReadRichString(ReadOnlySpan<byte> body)
+    public static string ReadRichString(
+        ReadOnlySpan<byte> body,
+        DocumentLoadBudgetState? loadBudget = null)
     {
         if (body.Length < 1)
             return "";
 
         int offset = 1;
-        return Biff12Values.ReadString(body, ref offset);
+        return Biff12Values.ReadString(body, ref offset, loadBudget);
     }
 }

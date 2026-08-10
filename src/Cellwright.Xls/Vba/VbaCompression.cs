@@ -42,16 +42,31 @@ internal static class VbaCompression
     /// <exception cref="XlsFormatException">
     /// The container is not one, is truncated mid-chunk, or expands past <paramref name="sizeLimit"/>.
     /// </exception>
-    public static byte[] Decompress(ReadOnlySpan<byte> container, int sizeLimit = DefaultSizeLimit)
+    public static byte[] Decompress(ReadOnlySpan<byte> container, int sizeLimit = DefaultSizeLimit) =>
+        Decompress(container, loadBudget: null, CancellationToken.None, sizeLimit);
+
+    /// <summary>Unpacks while contributing expansion to an outer document load.</summary>
+    /// <param name="container">The container, starting at its signature byte.</param>
+    /// <param name="loadBudget">Shared counters inherited from the workbook or package.</param>
+    /// <param name="cancellationToken">Cancels decompression between tokens.</param>
+    /// <param name="sizeLimit">The codec-specific ceiling in addition to the document budget.</param>
+    public static byte[] Decompress(
+        ReadOnlySpan<byte> container,
+        DocumentLoadBudgetState? loadBudget,
+        CancellationToken cancellationToken,
+        int sizeLimit = DefaultSizeLimit)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (container.Length < 1 || container[0] != ContainerSignature)
             throw new XlsFormatException("The VBA stream does not begin with a compressed container.");
 
-        // Chunks are capped at 4096 bytes out of at most 4098 in, so the ratio is the guide.
-        var output = new List<byte>(container.Length * 2);
+        // Starting small matters for a hostile compressed stream: its declared CFB length has
+        // already been checked, but it must not turn into an equally large eager output buffer.
+        var output = new List<byte>(Math.Min(container.Length, 64 * 1024));
         int position = 1;
         while (position + 1 < container.Length)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int header = BinaryPrimitives.ReadUInt16LittleEndian(container[position..]);
             position += 2;
 
@@ -61,19 +76,23 @@ internal static class VbaCompression
             // The recorded size is three less than the whole chunk, header included, so the
             // data after the header runs one byte longer than the number itself.
             int end = Math.Min(position + (header & HeaderSizeMask) + 1, container.Length);
+            int beforeChunk = output.Count;
             if ((header & HeaderCompressedFlag) == 0)
             {
                 // A chunk that would not have compressed is stored as it is.
                 foreach (byte value in container[position..Math.Min(position + ChunkSize, end)])
+                {
+                    EnsureCanGrow(output.Count, 1, sizeLimit, loadBudget);
                     output.Add(value);
+                }
             }
             else
             {
-                DecompressChunk(container[position..end], output, sizeLimit);
+                DecompressChunk(
+                    container[position..end], output, sizeLimit, loadBudget, cancellationToken);
             }
 
-            if (output.Count > sizeLimit)
-                throw TooLarge(sizeLimit);
+            loadBudget?.AddInflatedBytes(output.Count - beforeChunk);
 
             position = end;
         }
@@ -84,7 +103,12 @@ internal static class VbaCompression
     private static XlsFormatException TooLarge(int sizeLimit) => new(
         $"The VBA stream expands past {sizeLimit} bytes, which no real project reaches. It was not read further.");
 
-    private static void DecompressChunk(ReadOnlySpan<byte> chunk, List<byte> output, int sizeLimit)
+    private static void DecompressChunk(
+        ReadOnlySpan<byte> chunk,
+        List<byte> output,
+        int sizeLimit,
+        DocumentLoadBudgetState? loadBudget,
+        CancellationToken cancellationToken)
     {
         int chunkStart = output.Count;
         int position = 0;
@@ -93,8 +117,10 @@ internal static class VbaCompression
             byte flags = chunk[position++];
             for (int token = 0; token < 8 && position < chunk.Length; token++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if ((flags & (1 << token)) == 0)
                 {
+                    EnsureCanGrow(output.Count, 1, sizeLimit, loadBudget);
                     output.Add(chunk[position++]);
                     continue;
                 }
@@ -102,12 +128,12 @@ internal static class VbaCompression
                 if (position + 1 >= chunk.Length)
                     return;
 
-                // Checked inside the loop as well as between chunks: a single token can add
-                // four thousand bytes, and a chunk holds two thousand tokens.
-                if (output.Count > sizeLimit)
-                    throw TooLarge(sizeLimit);
-
-                Copy(BinaryPrimitives.ReadUInt16LittleEndian(chunk[position..]), output, chunkStart);
+                Copy(
+                    BinaryPrimitives.ReadUInt16LittleEndian(chunk[position..]),
+                    output,
+                    chunkStart,
+                    sizeLimit,
+                    loadBudget);
                 position += 2;
             }
         }
@@ -122,7 +148,12 @@ internal static class VbaCompression
     /// <c>DecompressedChunkStart</c>. One that does means the stream is not what it says it is,
     /// and carrying on would produce not text but a convincing imitation of it.
     /// </remarks>
-    private static void Copy(int token, List<byte> output, int chunkStart)
+    private static void Copy(
+        int token,
+        List<byte> output,
+        int chunkStart,
+        int sizeLimit,
+        DocumentLoadBudgetState? loadBudget)
     {
         int written = output.Count - chunkStart;
         int offsetBits = Math.Max(4, CeilingLog2(written));
@@ -137,8 +168,28 @@ internal static class VbaCompression
         if (source < chunkStart)
             throw new XlsFormatException("A back reference in the VBA stream points before the start of its chunk.");
 
+        EnsureCanGrow(output.Count, length, sizeLimit, loadBudget);
         for (int i = 0; i < length; i++)
             output.Add(output[source + i]);
+    }
+
+    private static void EnsureCanGrow(
+        int current,
+        int additional,
+        int sizeLimit,
+        DocumentLoadBudgetState? loadBudget)
+    {
+        long observed = (long)current + additional;
+        if (loadBudget is not null)
+        {
+            DocumentLoadBudgetState.Ensure(
+                nameof(DocumentLoadBudget.MaxPartBytes),
+                loadBudget.Budget.MaxPartBytes,
+                observed);
+        }
+
+        if (observed > sizeLimit)
+            throw TooLarge(sizeLimit);
     }
 
     /// <summary>The smallest power of two that reaches <paramref name="value"/>, as an exponent.</summary>

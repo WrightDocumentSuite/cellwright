@@ -173,6 +173,99 @@ There is no third-party parsing baseline on purpose: the parser shipped with Clo
 visitor interface with two dozen members, and a comparison would mostly measure an adapter written
 for it.
 
+## Formulas: copied conditions and sliding range cache
+
+These are forward baselines for the copy-aware conditional-format path added in Stage A. One
+operation is the complete loop shown in the scenario — allocations are not per cell. The copied
+expression was invoked five times inside each measured iteration so the iteration stayed above
+BenchmarkDotNet's 100 ms recommendation; the table still reports one 100,000-cell operation.
+
+| Scenario | Calls | Time (mean) | Allocations |
+| --- | ---: | ---: | ---: |
+| Copied `$A1>0` expression | 100,000 | **46.13 ms** | **4.58 MB** |
+| Copied `VLOOKUP` over a sliding `A1:B32` | 70,000 | **202.48 ms** | **129.78 MB** |
+
+The expression keeps one compiled program and applies only the row/column delta at execution; unit
+tests enforce that cache count as well as mixed `$` axes, `#REF!` at the grid boundary, and
+structured `[@Column]` on the target row. Dynamic formula text produced by `INDIRECT` has a separate
+1,024-entry exact LRU so cardinality cannot grow with the sheet.
+
+The sliding lookup intentionally goes beyond the old retained-cell cliff: every `A1:B32` rectangle
+contains 64 cells, so a two-million-cell budget begins evicting after roughly 31,250 distinct
+ranges. The 70,000-range pass exercises eviction throughout its second half. The current cache uses
+stored global and per-sheet list nodes, making hit, insertion, eviction, and unlink O(1); this row is
+the baseline for future profiles, not a speedup claim against an unmeasured implementation.
+
+## PDF export (20,000 rows × 5 columns)
+
+Rendering builds 445 pages in memory. The dense cases hold 100,000 values; the sparse case names
+the same `A1:E20000` print area but occupies only `A1`.
+
+| Scenario | Time (mean) | Allocations |
+| --- | ---: | ---: |
+| Plain dense sheet | 533.81 ms | 106.57 MB |
+| Sparse explicit print area | **23.64 ms** | **6.32 MB** |
+| Number formats | 642.05 ms | 124.72 MB |
+| Tagged PDF | 1,147.01 ms | 402.46 MB |
+| Two comparison rules | 682.43 ms | 191.63 MB |
+| Color scale and data bar | 816.88 ms | 203.65 MB |
+
+The sparse fast path deliberately keeps every requested page but avoids cell passes that cannot
+draw anything. In a back-to-back run on the same machine, the sparse case moved from 54.96 ms to
+23.64 ms (2.32×); allocations stayed at 6.32 MB because page objects still have to exist. The job
+uses three measured iterations, so the absolute confidence interval is wide; the before range
+(46.77–61.89 ms) and after range (19.16–29.48 ms) did not overlap.
+
+## Stage A verification snapshot (2026-08-01)
+
+The production fixes were bracketed with the same serial Release commands on Windows Server 2022,
+.NET SDK 10.0.302, and an Intel Core i7-8700 (6 cores / 12 threads). The baseline was captured
+before the conditional-format and sparse-rendering changes; the final column includes them.
+
+| Check | Baseline | After Stage A |
+| --- | ---: | ---: |
+| Clean Release build, wall clock | 372.523 s | 26.291 s |
+| Build warnings / errors | 0 / 0 | 0 / 0 |
+| Full Release test run, wall clock | 251.724 s | 207.523 s |
+| Passed / skipped / failed | 1,834 / 1 / 0 | **1,947 / 1 / 0** |
+| Total test cases | 1,835 | **1,948** |
+
+The final test count is Formulas 894, Mapping 9, PDF 184, Core 579 (578 passed and one intentional
+culture skip), and XLS/BIFF/XLSB 282. The 113 additional cases cover the corrected semantics and
+round trips. Build and test wall-clock values are verification telemetry, not performance
+benchmarks: compiler and filesystem caches make the build columns especially unsuitable for a
+speedup claim. The PDF and copied-formula tables above are the controlled BenchmarkDotNet
+measurements.
+
+## x14 icon-set verification snapshot (2026-08-02)
+
+The first read-only x14 projection was gated with the same serial Release commands and environment
+as Stage A. This is the post-change, warmed verification run; the implementation adds no public
+editable rules and does not include the separate extended-data-bar stage.
+
+| Check | After Stage A | After x14 icon sets |
+| --- | ---: | ---: |
+| No-incremental Release build, wall clock | 26.291 s | **26.937 s** |
+| Build warnings / errors | 0 / 0 | **0 / 0** |
+| Full Release test run, wall clock | 207.523 s | **235.293 s** |
+| Passed / skipped / failed | 1,947 / 1 / 0 | **1,976 / 1 / 0** |
+| Total test cases | 1,948 | **1,977** |
+
+The 29 added cases are 22 core cases and 7 PDF cases. They cover four producer-generated
+non-custom rules, three custom opaque rules, `gte`, reverse, hidden values, worksheet-wide
+priorities, XML preservation and structural invalidation, plus the three new vector families. The
+focused conditional-format runs were 52/52 core cases in 4 seconds and 21/21 PDF cases in 1 second.
+
+Wall-clock values remain telemetry: the unchanged XLS test project alone took 2 minutes 25 seconds
+in this run and dominated the 27.770-second difference. The controlled BenchmarkDotNet baselines
+above were not rerun because this stage changes x14 parsing and icon geometry, not the measured
+copied-formula, sparse-layout, or data-bar paths.
+
+```bash
+dotnet build Cellwright.slnx -c Release --no-restore --no-incremental --verbosity minimal -m:1 /nodeReuse:false
+dotnet test Cellwright.slnx -c Release --no-build --no-restore --verbosity minimal -m:1 /nodeReuse:false
+```
+
 ## How to reproduce
 
 ```bash
@@ -185,7 +278,10 @@ dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- -
 dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *IncrementalCalcBenchmarks*
 dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *RangeEditBenchmarks*
 dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *SubscriptionLookupBenchmarks*
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *CopiedFormulaBenchmarks*
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *CopiedRangeCacheBenchmarks*
 dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *XlsBenchmarks*
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *PdfBenchmarks*
 ```
 
 `FormulaCalcBenchmarks` dominates the wall clock: ClosedXML spends two and a half minutes per

@@ -46,6 +46,8 @@ public static class WorkbookPdfExtensions
                 Tagged = options.Tagged,
                 Language = options.Language,
                 MaxPages = options.MaxPages,
+                FormulaEvaluator = options.FormulaEvaluator,
+                RelativeFormulaEvaluator = options.RelativeFormulaEvaluator,
             };
 
             one.Sheets.Add(sheet.Name);

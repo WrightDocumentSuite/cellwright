@@ -10,18 +10,14 @@ namespace Cellwright.Streaming;
 /// </summary>
 internal static class CommentsPart
 {
-    /// <summary>Parses a comments part into flat notes; rich-text runs are concatenated.</summary>
-    public static List<CellComment> Read(Stream stream) => Read(stream, out _);
+    private const string _revisionNamespace = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision";
 
     /// <summary>
-    /// Parses a comments part, reporting how many of its notes were placeholders standing in
-    /// for threaded comments.
+    /// Parses a comments part into flat notes; rich-text runs are concatenated. Placeholder
+    /// candidates stay in the result until the loader can reconcile them with live threads.
     /// </summary>
-    /// <param name="stream">The part's content.</param>
-    /// <param name="threadPlaceholders">Number of notes left out because a thread owns them.</param>
-    public static List<CellComment> Read(Stream stream, out int threadPlaceholders)
+    public static List<CellComment> Read(Stream stream)
     {
-        threadPlaceholders = 0;
         var authors = new List<string>();
         var comments = new List<CellComment>();
         using var xml = XmlReader.Create(stream, XmlDefaults.ReaderSettings);
@@ -42,10 +38,8 @@ internal static class CommentsPart
             }
             else if (xml.LocalName == "comment")
             {
-                if (ReadComment(xml, authors, out bool placeholder) is { } comment)
+                if (ReadComment(xml, authors) is { } comment)
                     comments.Add(comment);
-                if (placeholder)
-                    threadPlaceholders++;
                 advance = false;
             }
         }
@@ -53,10 +47,10 @@ internal static class CommentsPart
         return comments;
     }
 
-    private static CellComment? ReadComment(XmlReader xml, List<string> authors, out bool placeholder)
+    private static CellComment? ReadComment(XmlReader xml, List<string> authors)
     {
-        placeholder = false;
         string? reference = xml.GetAttribute("ref");
+        string? revisionUid = xml.GetAttribute("uid", _revisionNamespace);
         int authorId = int.TryParse(xml.GetAttribute("authorId"), NumberStyles.None, CultureInfo.InvariantCulture, out int id)
             ? id
             : -1;
@@ -83,27 +77,14 @@ internal static class CommentsPart
 
         string? author = (uint)authorId < (uint)authors.Count ? authors[authorId] : null;
 
-        // A threaded comment leaves a placeholder note behind for readers that predate threads,
-        // marked by an author of "tc={uid}" (MS-XLSX 2.3.7.3). Excel keeps it hidden; surfacing
-        // it would put a note in the model whose author is a bare identifier and whose text
-        // duplicates the thread's first message.
-        if (IsThreadPlaceholder(author))
-        {
-            placeholder = true;
-            return null;
-        }
-
         return new CellComment
         {
             Cell = cell,
             Text = OoxmlText.Decode(text.ToString()),
             Author = author,
+            RevisionUid = revisionUid,
         };
     }
-
-    /// <summary>Whether an author names a threaded comment rather than a person.</summary>
-    private static bool IsThreadPlaceholder(string? author) =>
-        author is not null && author.StartsWith("tc=", StringComparison.Ordinal);
 
     /// <summary>Writes the comments part for a set of notes.</summary>
     public static void Write(Utf8XmlWriter xml, IReadOnlyList<CellComment> comments)
@@ -116,8 +97,16 @@ internal static class CommentsPart
                 authors.Add(author);
         }
 
+        bool hasRevisionUids = comments.Any(static comment => comment.RevisionUid is { Length: > 0 });
         xml.WriteDeclaration();
-        xml.WriteRaw("<comments xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><authors>"u8);
+        xml.WriteRaw("<comments xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\""u8);
+        if (hasRevisionUids)
+        {
+            xml.WriteRaw(" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\""u8);
+            xml.WriteRaw(" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\""u8);
+            xml.WriteRaw(" mc:Ignorable=\"xr\""u8);
+        }
+        xml.WriteRaw("><authors>"u8);
         foreach (string author in authors)
         {
             xml.WriteRaw("<author>"u8);
@@ -132,6 +121,11 @@ internal static class CommentsPart
             xml.WriteFormattable(comment.Cell);
             xml.WriteRaw("\" authorId=\""u8);
             xml.WriteInt32(authors.IndexOf(comment.Author ?? ""));
+            if (comment.RevisionUid is { Length: > 0 } revisionUid)
+            {
+                xml.WriteRaw("\" xr:uid=\""u8);
+                xml.WriteAttributeText(revisionUid);
+            }
             // A single run rather than a bare t element: the schema allows both, but readers
             // that expect Excel's own output only look at runs.
             xml.WriteRaw("\"><text><r><t xml:space=\"preserve\">"u8);

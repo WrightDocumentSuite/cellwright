@@ -60,6 +60,10 @@ await foreach (RowData row in reader.ReadRowsAsync("Data"))
 }
 ```
 
+Streaming avoids a worksheet-sized DOM; it does not make caller-controlled work unbounded.
+`XlsxReaderOptions.Budget` applies the same input, package, XML, cell, string, media and embedding
+ceilings as `Workbook.LoadAsync`. See [Loading untrusted spreadsheets](loading-untrusted-input.md).
+
 Rules:
 
 - `RowData` is a view over a reused buffer: process or copy (`ToArray()`) before the next iteration.

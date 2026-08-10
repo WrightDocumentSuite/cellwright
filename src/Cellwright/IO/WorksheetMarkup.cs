@@ -1,7 +1,27 @@
+using System.Xml;
+using System.Xml.Linq;
+using Cellwright.Xml;
+
 namespace Cellwright.IO;
 
 /// <summary>Rich shared-string markup and the plain text it originally represented.</summary>
 internal readonly record struct RichStringMarkup(string Text, string Markup);
+
+/// <summary>
+/// Read-only semantic view of the extension-only conditional formats a worksheet carries.
+/// The raw <c>extLst</c> remains the source of truth for saving; these rules exist only so
+/// evaluators can apply the subset the model understands without exposing it as editable state.
+/// </summary>
+internal sealed class ExtensionConditionalFormatProjection(
+    IReadOnlyList<ConditionalFormatRule> rules,
+    bool hasUnsupportedRules)
+{
+    /// <summary>Rules that can be evaluated without changing their extension representation.</summary>
+    public IReadOnlyList<ConditionalFormatRule> Rules { get; } = [.. rules];
+
+    /// <summary>Whether at least one extension rule could not be represented by this view.</summary>
+    public bool HasUnsupportedRules { get; } = hasUnsupportedRules;
+}
 
 /// <summary>
 /// The parts of a worksheet the model does not represent, kept in the slots the schema
@@ -85,4 +105,96 @@ internal sealed class WorksheetMarkup
 
     /// <summary>The trailing <c>extLst</c> element.</summary>
     public string? Extensions { get; set; }
+
+    /// <summary>
+    /// Priorities owned by extension-only x14 conditional-format rules. Base rules regenerated
+    /// from the model must not reuse them because priority is worksheet-wide across both forms.
+    /// </summary>
+    public IReadOnlySet<int>? ExtensionConditionalFormatPriorities { get; set; }
+
+    /// <summary>Whether the trailing extension list contains x14 conditional formatting.</summary>
+    public bool HasExtensionConditionalFormats { get; set; }
+
+    /// <summary>
+    /// Semantic view of supported extension-only rules. It is deliberately separate from
+    /// <see cref="ConditionalFormats"/> so regenerating editable base rules cannot duplicate an
+    /// extension rule or write it in the wrong namespace.
+    /// </summary>
+    public ExtensionConditionalFormatProjection? ExtensionConditionalFormats { get; set; }
+
+    /// <summary>
+    /// Whether some extension conditional formatting remains unavailable to the evaluator.
+    /// A missing projection while x14 content is still present means none of it can be applied.
+    /// </summary>
+    public bool HasUnsupportedExtensionConditionalFormats =>
+        HasExtensionConditionalFormats &&
+        (ExtensionConditionalFormats is null || ExtensionConditionalFormats.HasUnsupportedRules);
+
+    /// <summary>
+    /// Stops using a semantic view that could not be trusted or safely removed. Structural edits
+    /// use <see cref="RemoveExtensionConditionalFormats"/> so stale raw ranges are not saved.
+    /// </summary>
+    public void InvalidateExtensionConditionalFormats() => ExtensionConditionalFormats = null;
+
+    /// <summary>
+    /// Removes the x14 conditional-format extension after an edit that moved its unmodelled
+    /// ranges or formulas. Other extension elements and the outer list remain intact.
+    /// </summary>
+    /// <returns>Whether an x14 conditional-format container was removed.</returns>
+    public bool RemoveExtensionConditionalFormats()
+    {
+        if (!HasExtensionConditionalFormats || string.IsNullOrWhiteSpace(Extensions))
+        {
+            InvalidateExtensionConditionalFormats();
+            return false;
+        }
+
+        const string x14Namespace =
+            "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+        try
+        {
+            XmlReaderSettings settings = XmlDefaults.ReaderSettings.Clone();
+            settings.IgnoreWhitespace = false;
+            using var xml = XmlReader.Create(new StringReader(Extensions), settings);
+            XDocument document = XDocument.Load(xml, System.Xml.Linq.LoadOptions.PreserveWhitespace);
+            XName name = XName.Get("conditionalFormattings", x14Namespace);
+            XElement[] containers = [.. document.Descendants(name)];
+            if (containers.Length == 0)
+            {
+                InvalidateExtensionConditionalFormats();
+                return false;
+            }
+
+            XElement[] parents = [.. containers
+                .Select(static container => container.Parent)
+                .OfType<XElement>()
+                .Distinct()];
+            foreach (XElement container in containers)
+                container.Remove();
+
+            // The dedicated Office extension normally has no other child. Remove that now-empty
+            // wrapper, but retain it when a producer placed unrelated extension data beside CF.
+            foreach (XElement parent in parents)
+            {
+                if (!parent.Elements().Any())
+                    parent.Remove();
+            }
+
+            Extensions = document.Root is { } root && root.Elements().Any()
+                ? document.ToString(System.Xml.Linq.SaveOptions.DisableFormatting)
+                : null;
+            HasExtensionConditionalFormats = false;
+            ExtensionConditionalFormatPriorities = null;
+            ExtensionConditionalFormats = null;
+            return true;
+        }
+        catch (XmlException)
+        {
+            // Captured worksheet markup is well formed in the ordinary loader path. If a caller
+            // supplies malformed internal markup, keeping it opaque is safer than deleting other
+            // extensions while guessing at element boundaries.
+            InvalidateExtensionConditionalFormats();
+            return false;
+        }
+    }
 }

@@ -25,9 +25,45 @@ internal static class WorkbookLoader
         {
             LeaveOpen = options.LeaveOpen,
             OnWarning = Warn,
-            Limits = options.Limits,
+            Budget = options.EffectiveBudget,
         };
         XlsxReader reader = await XlsxReader.OpenAsync(stream, readerOptions, cancellationToken).ConfigureAwait(false);
+        await PopulateAsync(workbook, reader, options, Warn, cancellationToken).ConfigureAwait(false);
+        workbook.AttachDiagnostics(diagnostics);
+    }
+
+    /// <summary>Loads from a package already admitted under an outer container's budget.</summary>
+    internal static async ValueTask LoadAsync(
+        Workbook workbook,
+        OpcPackage package,
+        LoadOptions options,
+        CancellationToken cancellationToken)
+    {
+        var diagnostics = new LoadDiagnostics();
+        void Warn(WorkbookWarning warning)
+        {
+            diagnostics.Add(warning);
+            options.OnWarning?.Invoke(warning);
+        }
+
+        var readerOptions = new XlsxReaderOptions
+        {
+            LeaveOpen = false,
+            OnWarning = Warn,
+            Budget = package.LoadBudget?.Budget ?? options.EffectiveBudget,
+        };
+        XlsxReader reader = await XlsxReader.OpenAsync(package, readerOptions, cancellationToken).ConfigureAwait(false);
+        await PopulateAsync(workbook, reader, options, Warn, cancellationToken).ConfigureAwait(false);
+        workbook.AttachDiagnostics(diagnostics);
+    }
+
+    private static async ValueTask PopulateAsync(
+        Workbook workbook,
+        XlsxReader reader,
+        LoadOptions options,
+        Action<WorkbookWarning> Warn,
+        CancellationToken cancellationToken)
+    {
         await using (reader.ConfigureAwait(false))
         {
             workbook.SetDateSystem(reader.DateSystem);
@@ -58,6 +94,7 @@ internal static class WorkbookLoader
                 styleMap[i] = workbook.StylePool.Intern(styles.CellFormats[i]);
             workbook.LoadedDifferentialStyles = styles.DifferentialStyles;
 
+            var placeholders = new List<PlaceholderCandidate>();
             foreach (SheetInfo info in reader.Sheets)
             {
                 Worksheet sheet = AddSheetSafe(workbook, info.Name, Warn);
@@ -68,8 +105,9 @@ internal static class WorkbookLoader
                 var sink = new WorksheetContentSink(sheet, styleMap, relationships, preserve, Warn);
                 await reader.ReadSheetContentAsync(info.Index, sink, cancellationToken).ConfigureAwait(false);
                 AttachConditionalStyles(sheet, styles.DifferentialStyles);
-                await LoadCommentsAsync(sheet, reader, info.Index, relationships, Warn, cancellationToken).ConfigureAwait(false);
                 await LoadThreadedCommentsAsync(sheet, reader, info.Index, relationships, Warn, cancellationToken).ConfigureAwait(false);
+                await LoadCommentsAsync(
+                    sheet, reader, info.Index, relationships, placeholders, Warn, cancellationToken).ConfigureAwait(false);
                 await LoadTablesAsync(sheet, reader, info.Index, relationships, cancellationToken).ConfigureAwait(false);
                 await DrawingLoader.LoadAsync(
                     reader.Package, sheet, reader.SheetPartPath(info.Index), relationships, Warn, cancellationToken)
@@ -79,6 +117,7 @@ internal static class WorkbookLoader
             }
 
             await LoadPeopleAsync(workbook, reader, Warn, cancellationToken).ConfigureAwait(false);
+            ReconcileThreadedComments(workbook, placeholders, Warn);
             await RecognizeDynamicArraysAsync(workbook, reader, cancellationToken).ConfigureAwait(false);
             LoadDefinedNames(workbook, reader.DefinedNames, Warn);
             workbook.ExternalBooks = await ExternalBookLoader.LoadAsync(reader, Warn, cancellationToken).ConfigureAwait(false);
@@ -86,8 +125,6 @@ internal static class WorkbookLoader
             if (preserve)
                 workbook.Preserved = await reader.CreatePreservationAsync(cancellationToken).ConfigureAwait(false);
         }
-
-        workbook.AttachDiagnostics(diagnostics);
     }
 
     /// <summary>
@@ -129,6 +166,7 @@ internal static class WorkbookLoader
             byte[] content = await reader.ReadPartBytesAsync(part, cancellationToken).ConfigureAwait(false);
             using var stream = new MemoryStream(content, writable: false);
             ThreadedCommentsPart.Read(stream, sheet.ThreadedComments);
+            sheet.ThreadedComments.ReportTopologyWarnings(sheet.Name, warn);
         }
         catch (System.Xml.XmlException exception)
         {
@@ -241,6 +279,7 @@ internal static class WorkbookLoader
         XlsxReader reader,
         int sheetIndex,
         IReadOnlyList<OpcRelationship> relationships,
+        List<PlaceholderCandidate> placeholders,
         Action<WorkbookWarning> warn,
         CancellationToken cancellationToken)
     {
@@ -258,18 +297,256 @@ internal static class WorkbookLoader
         {
             byte[] content = await reader.ReadPartBytesAsync(commentsPart, cancellationToken).ConfigureAwait(false);
             using var stream = new MemoryStream(content, writable: false);
-            // The placeholder notes that stand in for threads are counted and dropped: they are
-            // regenerated from the threads on save, so keeping them here would mean two models of
-            // the same thing that could disagree.
-            List<CellComment> notes = CommentsPart.Read(stream, out _);
+            // Reconciliation is workbook-wide: a placeholder can move a thread across sheets,
+            // and additional placeholders copy the whole conversation. Keep candidates aside
+            // until every sheet and thread part has been loaded.
+            List<CellComment> notes = CommentsPart.Read(stream);
             foreach (CellComment comment in notes)
-                sheet.Comments.AddFromFile(comment);
+            {
+                if (ThreadedCommentsPart.TryGetPlaceholderId(comment, out string id))
+                    placeholders.Add(new PlaceholderCandidate(sheet, comment, id));
+                else
+                    sheet.Comments.AddFromFile(comment);
+            }
         }
         catch (System.Xml.XmlException exception)
         {
             warn(new WorkbookWarning("BadComments", $"The notes of sheet '{sheet.Name}' could not be read: {exception.Message}"));
         }
     }
+
+    /// <summary>
+    /// Applies MS-XLSX 2.3.7.3.1 after every sheet has been loaded. The mandatory author token
+    /// identifies a root workbook-wide; the placeholder cell is authoritative, and extra
+    /// placeholders receive independent copies of the whole conversation.
+    /// </summary>
+    private static void ReconcileThreadedComments(
+        Workbook workbook,
+        List<PlaceholderCandidate> placeholders,
+        Action<WorkbookWarning> warn)
+    {
+        var rootsById = new Dictionary<string, Conversation>(StringComparer.OrdinalIgnoreCase);
+        var conversations = new List<Conversation>();
+        var occupiedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Worksheet sheet in workbook.Sheets)
+        {
+            foreach (ThreadedComment comment in sheet.ThreadedComments)
+                occupiedIds.Add(comment.Id);
+
+            foreach (ThreadedComment root in sheet.ThreadedComments.Threads)
+            {
+                Conversation conversation = BuildConversation(sheet, root);
+                conversations.Add(conversation);
+                if (!rootsById.TryAdd(root.Id, conversation))
+                {
+                    warn(new WorkbookWarning(
+                        "DuplicateThreadedCommentId",
+                        $"Thread root '{root.Id}' on sheet '{sheet.Name}' duplicates an earlier workbook-wide " +
+                        "identifier. Placeholder reconciliation uses the first root in workbook order.",
+                        root.Cell));
+                }
+            }
+        }
+
+        var matches = new Dictionary<Conversation, List<PlaceholderCandidate>>();
+        foreach (PlaceholderCandidate placeholder in placeholders)
+        {
+            if (rootsById.TryGetValue(placeholder.RootId, out Conversation? conversation))
+            {
+                if (!matches.TryGetValue(conversation, out List<PlaceholderCandidate>? found))
+                    matches.Add(conversation, found = []);
+                found.Add(placeholder);
+                continue;
+            }
+
+            // The candidate was intentionally not put in Comments. Marking the part modified
+            // ensures an orphan is really removed rather than copied through as raw OOXML.
+            placeholder.Sheet.Comments.MarkModified();
+            warn(new WorkbookWarning(
+                "OrphanThreadedCommentPlaceholderRemoved",
+                $"A legacy placeholder on sheet '{placeholder.Sheet.Name}' names no live thread root and was removed.",
+                placeholder.Note.Cell));
+        }
+
+        foreach (Conversation conversation in conversations)
+        {
+            if (!matches.TryGetValue(conversation, out List<PlaceholderCandidate>? found))
+            {
+                conversation.Sheet.ThreadedComments.RemoveReconciled(conversation.Messages);
+                warn(new WorkbookWarning(
+                    "ThreadedCommentWithoutPlaceholderRemoved",
+                    $"Thread '{conversation.Root.Id}' on sheet '{conversation.Sheet.Name}' has no legacy placeholder " +
+                    "and was removed during reconciliation.",
+                    conversation.Root.Cell));
+                continue;
+            }
+
+            PlaceholderCandidate primary = found[0];
+            ValidatePlaceholderUid(primary, conversation.Root, warn);
+            MoveConversation(conversation, primary, warn);
+
+            for (int i = 1; i < found.Count; i++)
+            {
+                PlaceholderCandidate additional = found[i];
+                ValidatePlaceholderUid(additional, conversation.Root, warn);
+                CloneConversation(conversation, additional, occupiedIds);
+                warn(new WorkbookWarning(
+                    "ThreadedCommentCopiedForPlaceholder",
+                    $"An additional placeholder copied thread '{conversation.Root.Id}' to " +
+                    $"'{additional.Sheet.Name}'!{additional.Note.Cell} with fresh message identifiers.",
+                    additional.Note.Cell));
+            }
+        }
+    }
+
+    private static Conversation BuildConversation(Worksheet sheet, ThreadedComment root)
+    {
+        var members = new HashSet<ThreadedComment>();
+        var parents = new Dictionary<ThreadedComment, ThreadedComment?>();
+        var stack = new Stack<(ThreadedComment Message, ThreadedComment? Parent)>();
+        stack.Push((root, null));
+        while (stack.Count > 0)
+        {
+            (ThreadedComment message, ThreadedComment? parent) = stack.Pop();
+            if (!members.Add(message))
+                continue;
+
+            parents.Add(message, parent);
+            for (int i = message.Replies.Count - 1; i >= 0; i--)
+                stack.Push((message.Replies[i], message));
+        }
+
+        var messages = new List<ThreadedComment>(members.Count);
+        foreach (ThreadedComment message in sheet.ThreadedComments)
+        {
+            if (members.Contains(message))
+                messages.Add(message);
+        }
+
+        return new Conversation(sheet, root, messages, parents);
+    }
+
+    private static void ValidatePlaceholderUid(
+        PlaceholderCandidate placeholder, ThreadedComment root, Action<WorkbookWarning> warn)
+    {
+        if (placeholder.Note.RevisionUid is not { Length: > 0 } uid ||
+            string.Equals(uid, root.Id, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // uid is a SHOULD rather than the correspondence key, but a contradictory value should
+        // not survive the next save: regeneration writes the root id.
+        placeholder.Sheet.Comments.MarkModified();
+        warn(new WorkbookWarning(
+            "ThreadedCommentPlaceholderUidMismatch",
+            $"The legacy placeholder for thread '{root.Id}' on sheet '{placeholder.Sheet.Name}' carried revision " +
+            $"uid '{uid}'. The mandatory tc= author token was used and the uid will be repaired on save.",
+            placeholder.Note.Cell));
+    }
+
+    private static void MoveConversation(
+        Conversation conversation, PlaceholderCandidate placeholder, Action<WorkbookWarning> warn)
+    {
+        bool changesSheet = !ReferenceEquals(conversation.Sheet, placeholder.Sheet);
+        bool changesCell = conversation.Messages.Any(message => message.Cell != placeholder.Note.Cell);
+        if (!changesSheet && !changesCell)
+            return;
+
+        CellRef sourceCell = conversation.Root.Cell;
+
+        if (changesSheet)
+        {
+            TransferCollectionMetadata(conversation, placeholder.Sheet, warn);
+            conversation.Sheet.ThreadedComments.RemoveReconciled(conversation.Messages);
+            foreach (ThreadedComment message in conversation.Messages)
+                message.Cell = placeholder.Note.Cell;
+            placeholder.Sheet.ThreadedComments.AddReconciled(conversation.Messages);
+        }
+        else
+        {
+            foreach (ThreadedComment message in conversation.Messages)
+                message.Cell = placeholder.Note.Cell;
+        }
+
+        warn(new WorkbookWarning(
+            "ThreadedCommentMovedToPlaceholder",
+            $"The legacy placeholder moved thread '{conversation.Root.Id}' from " +
+            $"'{conversation.Sheet.Name}'!{sourceCell} to " +
+            $"'{placeholder.Sheet.Name}'!{placeholder.Note.Cell}.",
+            placeholder.Note.Cell));
+    }
+
+    private static void TransferCollectionMetadata(
+        Conversation conversation, Worksheet target, Action<WorkbookWarning> warn)
+    {
+        ThreadedCommentCollection sourceComments = conversation.Sheet.ThreadedComments;
+        if (sourceComments.Count != conversation.Messages.Count ||
+            sourceComments.ExtensionListXml is not { Length: > 0 } sourceExtensions)
+            return;
+
+        if (target.ThreadedComments.ExtensionListXml is not { Length: > 0 } targetExtensions ||
+            string.Equals(sourceExtensions, targetExtensions, StringComparison.Ordinal))
+        {
+            target.ThreadedComments.ExtensionListXml = sourceExtensions;
+            sourceComments.ExtensionListXml = null;
+            return;
+        }
+
+        // There is no schema slot in which two list-level extLst blocks can be merged. Retain
+        // each one on its own collection; the now-empty source part is still written for this
+        // purpose, and the diagnostic makes that deliberate boundary visible.
+        warn(new WorkbookWarning(
+            "ThreadedCommentCollectionMetadataConflict",
+            $"Moving the last thread from '{conversation.Sheet.Name}' to '{target.Name}' encountered different " +
+            "collection-level extension lists. Each list was retained on its own sheet because they cannot be " +
+            "merged safely.",
+            conversation.Root.Cell));
+    }
+
+    private static void CloneConversation(
+        Conversation conversation,
+        PlaceholderCandidate placeholder,
+        HashSet<string> occupiedIds)
+    {
+        var ids = new Dictionary<ThreadedComment, string>();
+        foreach (ThreadedComment message in conversation.Messages)
+        {
+            string id;
+            do
+            {
+                id = Person.NewId();
+            }
+            while (!occupiedIds.Add(id));
+            ids.Add(message, id);
+        }
+
+        var copies = new List<ThreadedComment>(conversation.Messages.Count);
+        foreach (ThreadedComment message in conversation.Messages)
+        {
+            copies.Add(new ThreadedComment
+            {
+                Cell = placeholder.Note.Cell,
+                Text = message.Text,
+                PersonId = message.PersonId,
+                Id = ids[message],
+                ParentId = conversation.Parents[message] is { } parent ? ids[parent] : null,
+                Created = message.Created,
+                Resolved = message.Resolved,
+                MentionsXml = message.MentionsXml,
+                ExtensionListXml = message.ExtensionListXml,
+            });
+        }
+
+        placeholder.Sheet.ThreadedComments.AddReconciled(copies);
+    }
+
+    private readonly record struct PlaceholderCandidate(
+        Worksheet Sheet, CellComment Note, string RootId);
+
+    private sealed record Conversation(
+        Worksheet Sheet,
+        ThreadedComment Root,
+        List<ThreadedComment> Messages,
+        Dictionary<ThreadedComment, ThreadedComment?> Parents);
 
     /// <summary>Reads the tables the sheet's relationships point at.</summary>
     private static async ValueTask LoadTablesAsync(

@@ -1,4 +1,5 @@
 using System.Globalization;
+using Cellwright.Styles;
 using Cellwright.Xml;
 
 namespace Cellwright.Streaming;
@@ -17,9 +18,14 @@ internal static class ConditionalFormatWriter
     /// <param name="xml">Sheet writer positioned where the blocks belong.</param>
     /// <param name="rules">Rules of the sheet, in priority order.</param>
     /// <param name="styleIds">Differential format index per rule, or -1 for a rule that paints nothing.</param>
+    /// <param name="reservedPriorities">Priorities already owned by extension-only x14 rules.</param>
     public static void Write(
-        Utf8XmlWriter xml, IReadOnlyList<ConditionalFormatRule> rules, IReadOnlyList<int> styleIds)
+        Utf8XmlWriter xml,
+        IReadOnlyList<ConditionalFormatRule> rules,
+        IReadOnlyList<int> styleIds,
+        IReadOnlySet<int>? reservedPriorities = null)
     {
+        int[] priorities = NormalizePriorities(rules, reservedPriorities);
         int index = 0;
         while (index < rules.Count)
         {
@@ -32,7 +38,7 @@ internal static class ConditionalFormatWriter
             WriteRanges(xml, ranges);
             xml.WriteRaw("\">"u8);
             for (int i = index; i <= last; i++)
-                WriteRule(xml, rules[i], styleIds[i]);
+                WriteRule(xml, rules[i], styleIds[i], priorities[i]);
             xml.WriteRaw("</conditionalFormatting>"u8);
             index = last + 1;
         }
@@ -61,11 +67,63 @@ internal static class ConditionalFormatWriter
         }
     }
 
-    private static void WriteRule(Utf8XmlWriter xml, ConditionalFormatRule rule, int styleId)
+    private static int[] NormalizePriorities(
+        IReadOnlyList<ConditionalFormatRule> rules, IReadOnlySet<int>? reservedPriorities)
+    {
+        var normalized = new int[rules.Count];
+        var occupied = reservedPriorities is null
+            ? new HashSet<int>(rules.Count)
+            : new HashSet<int>(reservedPriorities);
+        foreach (ConditionalFormatRule rule in rules)
+        {
+            if (rule.Priority > 0)
+                occupied.Add(rule.Priority);
+        }
+
+        var emitted = new HashSet<int>(rules.Count);
+        for (int index = 0; index < rules.Count; index++)
+        {
+            int priority = rules[index].Priority;
+            if (priority > 0 &&
+                reservedPriorities?.Contains(priority) is not true &&
+                emitted.Add(priority))
+            {
+                // Keep valid priorities byte-for-byte. Other OOXML parts (notably pivot-table
+                // conditional formatting) can refer to this number.
+                normalized[index] = priority;
+                continue;
+            }
+
+            int replacement = NextFreePriority(priority, occupied);
+            normalized[index] = replacement;
+            occupied.Add(replacement);
+            emitted.Add(replacement);
+        }
+
+        return normalized;
+    }
+
+    private static int NextFreePriority(int after, HashSet<int> occupied)
+    {
+        int candidate = after > 0 && after < int.MaxValue ? after + 1 : 1;
+        int start = candidate;
+        do
+        {
+            if (!occupied.Contains(candidate))
+                return candidate;
+            candidate = candidate == int.MaxValue ? 1 : candidate + 1;
+        }
+        while (candidate != start);
+
+        throw new InvalidOperationException("No positive conditional-format priority is available.");
+    }
+
+    private static void WriteRule(
+        Utf8XmlWriter xml, ConditionalFormatRule rule, int styleId, int priority)
     {
         if (rule.RawXml is { } raw)
         {
-            RawXml.Write(xml, raw);
+            RawXml.Write(xml, WithPriority(raw, priority));
             return;
         }
 
@@ -78,7 +136,7 @@ internal static class ConditionalFormatWriter
         }
 
         xml.WriteRaw("\" priority=\""u8);
-        xml.WriteInt32(rule.Priority);
+        xml.WriteInt32(priority);
         xml.WriteRaw("\""u8);
         WriteRuleAttributes(xml, rule);
         if (rule.StopIfTrue)
@@ -107,6 +165,78 @@ internal static class ConditionalFormatWriter
         WriteIconSet(xml, rule.IconSet);
         xml.WriteRaw("</cfRule>"u8);
     }
+
+    /// <summary>Replaces only the root cfRule priority while leaving opaque children verbatim.</summary>
+    private static string WithPriority(string raw, int priority)
+    {
+        int tag = raw.IndexOf('<');
+        if (tag < 0)
+            return raw;
+
+        int cursor = tag + 1;
+        if ((uint)cursor >= (uint)raw.Length || raw[cursor] is '/' or '!' or '?')
+            return raw;
+
+        // Skip the element's qualified name.
+        while ((uint)cursor < (uint)raw.Length &&
+               !IsXmlWhitespace(raw[cursor]) && raw[cursor] is not ('/' or '>'))
+        {
+            cursor++;
+        }
+
+        while ((uint)cursor < (uint)raw.Length)
+        {
+            while ((uint)cursor < (uint)raw.Length && IsXmlWhitespace(raw[cursor]))
+                cursor++;
+
+            if ((uint)cursor >= (uint)raw.Length)
+                return raw;
+            if (raw[cursor] == '>' || raw[cursor] == '/' &&
+                cursor + 1 < raw.Length && raw[cursor + 1] == '>')
+            {
+                string attribute = " priority=\"" +
+                    priority.ToString(CultureInfo.InvariantCulture) + "\"";
+                return raw.Insert(cursor, attribute);
+            }
+
+            int nameStart = cursor;
+            while ((uint)cursor < (uint)raw.Length &&
+                   !IsXmlWhitespace(raw[cursor]) && raw[cursor] is not ('=' or '/' or '>'))
+            {
+                cursor++;
+            }
+
+            int nameEnd = cursor;
+            while ((uint)cursor < (uint)raw.Length && IsXmlWhitespace(raw[cursor]))
+                cursor++;
+            if ((uint)cursor >= (uint)raw.Length || raw[cursor] != '=')
+                return raw;
+
+            cursor++;
+            while ((uint)cursor < (uint)raw.Length && IsXmlWhitespace(raw[cursor]))
+                cursor++;
+            if ((uint)cursor >= (uint)raw.Length || raw[cursor] is not ('\"' or '\''))
+                return raw;
+
+            char delimiter = raw[cursor++];
+            int valueStart = cursor;
+            int valueEnd = raw.IndexOf(delimiter, valueStart);
+            if (valueEnd < 0)
+                return raw;
+
+            if (raw.AsSpan(nameStart, nameEnd - nameStart).SequenceEqual("priority"))
+            {
+                return raw[..valueStart] + priority.ToString(CultureInfo.InvariantCulture) +
+                    raw[valueEnd..];
+            }
+
+            cursor = valueEnd + 1;
+        }
+
+        return raw;
+    }
+
+    private static bool IsXmlWhitespace(char value) => value is ' ' or '\t' or '\r' or '\n';
 
     private static void WriteFormula(Utf8XmlWriter xml, string formula)
     {
@@ -185,7 +315,7 @@ internal static class ConditionalFormatWriter
 
         xml.WriteRaw("<colorScale>"u8);
         foreach (ConditionalValue value in scale.Values)
-            WriteValue(xml, value);
+            WriteValue(xml, value, writeGreaterThanOrEqual: false);
         foreach (ExcelColor color in scale.Colors)
             WriteColor(xml, color);
         xml.WriteRaw("</colorScale>"u8);
@@ -195,13 +325,30 @@ internal static class ConditionalFormatWriter
     {
         if (bar is null)
             return;
+        if (!bar.HasValidLengths)
+        {
+            throw new InvalidOperationException(
+                "A conditional data bar must satisfy 0 <= MinimumLength <= MaximumLength <= 100.");
+        }
 
         xml.WriteRaw("<dataBar"u8);
+        if (bar.MinimumLength != 10)
+        {
+            xml.WriteRaw(" minLength=\""u8);
+            xml.WriteInt32(bar.MinimumLength);
+            xml.WriteRaw("\""u8);
+        }
+        if (bar.MaximumLength != 90)
+        {
+            xml.WriteRaw(" maxLength=\""u8);
+            xml.WriteInt32(bar.MaximumLength);
+            xml.WriteRaw("\""u8);
+        }
         if (!bar.ShowValue)
             xml.WriteRaw(" showValue=\"0\""u8);
         xml.WriteRaw(">"u8);
-        WriteValue(xml, bar.Minimum);
-        WriteValue(xml, bar.Maximum);
+        WriteValue(xml, bar.Minimum, writeGreaterThanOrEqual: false);
+        WriteValue(xml, bar.Maximum, writeGreaterThanOrEqual: false);
         WriteColor(xml, bar.Color);
         xml.WriteRaw("</dataBar>"u8);
     }
@@ -220,39 +367,38 @@ internal static class ConditionalFormatWriter
             xml.WriteRaw(" reverse=\"1\""u8);
         xml.WriteRaw(">"u8);
         foreach (ConditionalValue value in icons.Values)
-            WriteValue(xml, value);
+            WriteValue(xml, value, writeGreaterThanOrEqual: true);
         xml.WriteRaw("</iconSet>"u8);
     }
 
-    private static void WriteValue(Utf8XmlWriter xml, ConditionalValue value)
+    private static void WriteValue(
+        Utf8XmlWriter xml, ConditionalValue value, bool writeGreaterThanOrEqual)
     {
         xml.WriteRaw("<cfvo type=\""u8);
         xml.WriteRaw(ValueTypeName(value.Type));
+        xml.WriteRaw("\""u8);
         if (value.Value is { Length: > 0 } text)
         {
-            xml.WriteRaw("\" val=\""u8);
+            xml.WriteRaw(" val=\""u8);
             xml.WriteAttributeText(text);
+            xml.WriteRaw("\""u8);
         }
         else if (value.Type is ConditionalValueType.Number or ConditionalValueType.Percent or ConditionalValueType.Percentile)
         {
-            xml.WriteRaw("\" val=\"0"u8);
+            xml.WriteRaw(" val=\"0\""u8);
         }
 
-        xml.WriteRaw("\"/>"u8);
+        // ISO/IEC 29500-1 18.3.1.11 defines gte only for icon-set thresholds. Emitting it
+        // for a colour scale or data bar produces markup that Excel accepts leniently but the
+        // format explicitly forbids.
+        if (writeGreaterThanOrEqual && !value.GreaterThanOrEqual)
+            xml.WriteRaw(" gte=\"0\""u8);
+
+        xml.WriteRaw("/>"u8);
     }
 
-    private static void WriteColor(Utf8XmlWriter xml, ExcelColor color)
-    {
-        if (color.IsAuto)
-        {
-            xml.WriteRaw("<color auto=\"1\"/>"u8);
-            return;
-        }
-
-        xml.WriteRaw("<color rgb=\""u8);
-        xml.WriteAttributeText(color.ToHex());
-        xml.WriteRaw("\"/>"u8);
-    }
+    private static void WriteColor(Utf8XmlWriter xml, ExcelColor color) =>
+        StylesPartWriter.WriteColorElement(xml, "<color rgb=\""u8, color);
 
     private static ReadOnlySpan<byte> TypeName(ConditionalFormatType type) => type switch
     {

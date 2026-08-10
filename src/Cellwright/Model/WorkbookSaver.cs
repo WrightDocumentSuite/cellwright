@@ -165,7 +165,7 @@ internal static class WorkbookSaver
             await writer.WritePartAsync(
                 threadedPart,
                 XlsxSchema.ContentTypeThreadedComments,
-                xml => ThreadedCommentsPart.Write(xml, [.. sheet.ThreadedComments]),
+                xml => ThreadedCommentsPart.Write(xml, sheet.ThreadedComments),
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -176,7 +176,7 @@ internal static class WorkbookSaver
         // something on the cell. Those notes are generated rather than kept: the thread is what
         // the model owns, and a stale placeholder would name a message that is no longer there.
         List<CellComment> comments = [.. sheet.Comments];
-        comments.AddRange(ThreadedCommentsPart.Placeholders([.. sheet.ThreadedComments], sheet.Workbook.People));
+        comments.AddRange(ThreadedCommentsPart.Placeholders(sheet.ThreadedComments.Threads, sheet.Workbook.People));
         comments.Sort(static (left, right) => left.Cell.Row != right.Cell.Row
             ? left.Cell.Row.CompareTo(right.Cell.Row)
             : left.Cell.Column.CompareTo(right.Cell.Column));
@@ -317,7 +317,10 @@ internal static class WorkbookSaver
         (List<(string, ExcelTable)>? tableParts, List<string>? tableIds) =
             PlanTables(sheet, writer, partPath, relationships, ref nextTableId);
         (DrawingPlan? drawing, string? drawingId) = PlanDrawing(sheet, writer, partPath, relationships, warn);
-        bool conditionalFormatsChanged = sheet.ConditionalFormats.IsModified;
+        // Binary inputs have modelled rules but no OOXML block to replay. In that case the
+        // model is the only source of truth even though AddFromFile correctly left it unmodified.
+        bool conditionalFormatsChanged = sheet.ConditionalFormats.IsModified ||
+            sheet.Markup?.ConditionalFormats is null;
 
         var options = new SheetOptions
         {
@@ -375,6 +378,21 @@ internal static class WorkbookSaver
         if (!regenerates)
             return;
 
+        string? sourcePart = null;
+        if (workbook.Preserved is { } preserved)
+        {
+            foreach (OpcRelationship relationship in preserved.RelationshipsOf(preserved.WorkbookPartPath))
+            {
+                if (relationship.Type == XlsxSchema.RelPersons && !relationship.IsExternal)
+                {
+                    string candidate = OpcPath.Resolve(preserved.WorkbookPartPath, relationship.Target);
+                    if (preserved.Parts.ContainsKey(candidate))
+                        sourcePart = candidate;
+                    writer.ReleasePreservedPart(candidate);
+                }
+            }
+        }
+
         if (workbook.People.Count == 0)
         {
             // Every thread is gone, so the list of their authors goes with it.
@@ -382,13 +400,14 @@ internal static class WorkbookSaver
             return;
         }
 
+        string part = sourcePart ?? writer.ClaimPartPath(XlsxSchema.PersonsPart);
         await writer.WritePartAsync(
-            XlsxSchema.PartPersons,
+            part,
             XlsxSchema.ContentTypePersons,
-            xml => ThreadedCommentsPart.WritePeople(xml, [.. workbook.People]),
+            xml => ThreadedCommentsPart.WritePeople(xml, workbook.People),
             cancellationToken).ConfigureAwait(false);
 
-        writer.AddWorkbookPart(XlsxSchema.RelPersons, XlsxSchema.PartPersons);
+        writer.AddWorkbookPart(XlsxSchema.RelPersons, part);
     }
 
     /// <summary>
@@ -406,8 +425,12 @@ internal static class WorkbookSaver
         if (!Regenerates(sheet))
             return null;
 
+        ReleaseRelatedParts(
+            writer, sheetPartPath, relationships, static relationship =>
+                relationship.Type == XlsxSchema.RelThreadedComments);
         relationships.RemoveAll(static r => r.Type == XlsxSchema.RelThreadedComments);
-        if (sheet.ThreadedComments.Count == 0)
+        if (sheet.ThreadedComments.Count == 0 &&
+            sheet.ThreadedComments.ExtensionListXml is not { Length: > 0 })
             return null;
 
         var ids = new RelationshipIdAllocator();
@@ -568,10 +591,13 @@ internal static class WorkbookSaver
         // The original part may hold more than note boxes: form controls share the VML with
         // the comments, and regenerating it must not throw them away.
         VmlLeftovers? leftovers = LoadVmlLeftovers(sheet, sheetPartPath);
+        ReleaseRelatedParts(
+            writer, sheetPartPath, relationships, static relationship =>
+                relationship.Type is XlsxSchema.RelComments or XlsxSchema.RelVmlDrawing);
         relationships.RemoveAll(static r => r.Type is XlsxSchema.RelComments or XlsxSchema.RelVmlDrawing);
 
         // A thread needs a note beside it, so the note count is both kinds together.
-        int notes = sheet.Comments.Count + sheet.ThreadedComments.Count(static c => c.IsFirst);
+        int notes = sheet.Comments.Count + sheet.ThreadedComments.Threads.Count;
         if (notes == 0 && leftovers is null)
             return (null, null, null, null);
 
@@ -591,6 +617,19 @@ internal static class WorkbookSaver
             legacyDrawingId, XlsxSchema.RelVmlDrawing, OpcPath.MakeRelative(sheetPartPath, vmlPart)));
 
         return (commentsPart, vmlPart, legacyDrawingId, leftovers);
+    }
+
+    private static void ReleaseRelatedParts(
+        XlsxWriter writer,
+        string sourcePartPath,
+        IReadOnlyList<OpcRelationship> relationships,
+        Func<OpcRelationship, bool> owns)
+    {
+        foreach (OpcRelationship relationship in relationships)
+        {
+            if (owns(relationship) && !relationship.IsExternal)
+                writer.ReleasePreservedPart(OpcPath.Resolve(sourcePartPath, relationship.Target));
+        }
     }
 
     /// <summary>

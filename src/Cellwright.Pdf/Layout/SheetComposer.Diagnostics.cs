@@ -22,8 +22,16 @@ internal sealed partial class SheetComposer
                 $"paper-{_setup.PaperSize}");
         }
 
-        if (_sheet.Comments.Count > 0)
+        if (!_context.Options.IncludeComments && _sheet.Comments.Count > 0)
             Say(PdfExportWarningKind.ContentSkipped, "A comment on a cell is not printed.", "comment");
+
+        if (!_context.Options.IncludeComments && _sheet.ThreadedComments.Count > 0)
+        {
+            Say(
+                PdfExportWarningKind.ContentSkipped,
+                "Threaded comments and their replies are not printed.",
+                "threaded-comments");
+        }
 
         // Conditional formats are worked out rather than refused wholesale. Only the parts that
         // could not be applied are reported, and those are reported where they are met — see
@@ -91,7 +99,8 @@ internal sealed partial class SheetComposer
                 {
                     "conditional-format-formula" =>
                         "A conditional format whose condition is a formula was not worked out: no formula " +
-                        "evaluator was supplied. Set PdfExportOptions.FormulaEvaluator to have it applied.",
+                        "evaluator was supplied. Set PdfExportOptions.RelativeFormulaEvaluator (preferred) " +
+                        "or FormulaEvaluator to have it applied.",
                     "conditional-format-opaque" =>
                         "A conditional formatting rule the model does not represent was not worked out; " +
                         "the cell is printed in the style it states.",

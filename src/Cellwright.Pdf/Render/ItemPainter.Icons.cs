@@ -16,6 +16,11 @@ internal sealed partial class ItemPainter
     /// <summary>How much of the icon's square the shape actually occupies.</summary>
     private const double IconInset = 0.12;
 
+    private static readonly PdfColor EmptyStar = PdfColor.FromRgb(0xBFBFBF);
+    private static readonly PdfColor EmptyBox = PdfColor.FromRgb(0xE7E6E6);
+    private static readonly PdfColor EmptyBoxOutline = PdfColor.FromRgb(0xBFBFBF);
+    private static readonly PdfColor FilledBoxOutline = PdfColor.FromRgb(0x2F5597);
+
     private void PaintIcon(IconItem icon)
     {
         if (icon.Size <= 0)
@@ -49,10 +54,7 @@ internal sealed partial class ItemPainter
                 break;
 
             case IconShape.Triangle:
-                Polygon([
-                    (left + (side / 2), bottom + side),
-                    (left + side, bottom),
-                    (left, bottom)]);
+                Triangle(left, bottom, side, icon.Angle);
                 break;
 
             case IconShape.Diamond:
@@ -83,6 +85,21 @@ internal sealed partial class ItemPainter
                 Quarters(left, bottom, side, icon.Fraction);
                 break;
 
+            case IconShape.Star:
+                Star(left, bottom, side, icon.Color, icon.Fraction);
+                break;
+
+            case IconShape.Dash:
+                Dash(left, bottom, side);
+                break;
+
+            case IconShape.Boxes:
+                Boxes(left, bottom, side, icon.Color, icon.Fraction);
+                break;
+
+            case IconShape.None:
+                break;
+
             default:
                 break;
         }
@@ -111,6 +128,27 @@ internal sealed partial class ItemPainter
         ];
 
         var points = new (double X, double Y)[outline.Length];
+        for (int i = 0; i < outline.Length; i++)
+        {
+            double x = outline[i].X * side;
+            double y = outline[i].Y * side;
+            points[i] = (
+                centreX + (x * Math.Cos(radians)) + (y * Math.Sin(radians)),
+                centreY - (x * Math.Sin(radians)) + (y * Math.Cos(radians)));
+        }
+
+        Polygon(points);
+    }
+
+    /// <summary>A triangle turned clockwise from pointing up.</summary>
+    private void Triangle(double left, double bottom, double side, double degrees)
+    {
+        double centreX = left + (side / 2);
+        double centreY = bottom + (side / 2);
+        double radians = degrees * Math.PI / 180;
+        (double X, double Y)[] outline = [(0, 0.5), (0.5, -0.5), (-0.5, -0.5)];
+        var points = new (double X, double Y)[outline.Length];
+
         for (int i = 0; i < outline.Length; i++)
         {
             double x = outline[i].X * side;
@@ -160,6 +198,75 @@ internal sealed partial class ItemPainter
 
         _canvas.Rectangle(centre, bottom + (side * 0.3), width, side * 0.7).Fill();
         _canvas.Rectangle(centre, bottom, width, side * 0.18).Fill();
+    }
+
+    /// <summary>A five-point star whose coloured share grows from left to right.</summary>
+    private void Star(double left, double bottom, double side, PdfColor color, double fraction)
+    {
+        double centreX = left + (side / 2);
+        double centreY = bottom + (side / 2);
+        var points = new (double X, double Y)[10];
+
+        for (int i = 0; i < points.Length; i++)
+        {
+            double radius = side * (i % 2 == 0 ? 0.5 : 0.22);
+            double angle = (Math.PI / 2) + (i * Math.PI / 5);
+            points[i] = (
+                centreX + (radius * Math.Cos(angle)),
+                centreY + (radius * Math.Sin(angle)));
+        }
+
+        _canvas.FillColor(EmptyStar);
+        Polygon(points);
+
+        double share = Math.Clamp(fraction, 0, 1);
+        if (share <= 0)
+            return;
+
+        _canvas.Save()
+               .Rectangle(left, bottom, side * share, side)
+               .Clip()
+               .FillColor(color);
+        Polygon(points);
+        _canvas.Restore();
+    }
+
+    private void Dash(double left, double bottom, double side) =>
+        _canvas.Rectangle(
+            left + (side * 0.08),
+            bottom + (side * 0.4),
+            side * 0.84,
+            side * 0.2).Fill();
+
+    /// <summary>Four boxes filled from the bottom row upwards, giving five rating levels.</summary>
+    private void Boxes(double left, double bottom, double side, PdfColor color, double fraction)
+    {
+        const int BoxCount = 4;
+        double gap = side * 0.1;
+        double box = (side - gap) / 2;
+        int filled = (int)Math.Round(
+            Math.Clamp(fraction, 0, 1) * BoxCount,
+            MidpointRounding.AwayFromZero);
+
+        // Bottom-left, bottom-right, top-left, top-right: two filled boxes form a base and the
+        // next two build the rating upwards, as in Excel's five-box set.
+        (double X, double Y)[] positions =
+        [
+            (left, bottom),
+            (left + box + gap, bottom),
+            (left, bottom + box + gap),
+            (left + box + gap, bottom + box + gap),
+        ];
+
+        for (int i = 0; i < positions.Length; i++)
+        {
+            bool isFilled = i < filled;
+            _canvas.FillColor(isFilled ? color : EmptyBox)
+                   .StrokeColor(isFilled ? FilledBoxOutline : EmptyBoxOutline)
+                   .LineWidth(side * 0.035)
+                   .Rectangle(positions[i].X, positions[i].Y, box, box)
+                   .FillStroke();
+        }
     }
 
     /// <summary>Bars of rising height, the lower ones filled to show the rating.</summary>

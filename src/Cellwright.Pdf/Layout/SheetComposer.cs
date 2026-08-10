@@ -13,6 +13,7 @@ internal sealed partial class SheetComposer
     private readonly int _firstIndex;
 
     private SheetTags? _tags;
+    private SheetCommentPlan? _comments;
     private CellAppearances _appearances = null!;
     private ConditionalFormatEvaluator _conditional = null!;
 
@@ -31,8 +32,14 @@ internal sealed partial class SheetComposer
     public List<ComposedPage> Compose()
     {
         SheetPlan? plan = SheetPlan.For(_context, _sheet);
+        if (_context.Options.IncludeComments)
+            _comments = new SheetCommentPlan(_context, _sheet);
+
         if (plan is null)
+        {
+            _comments?.Complete();
             return [];
+        }
 
         if (_context.Options.Tagged)
             _tags = new SheetTags(_sheet, plan.TitleRows);
@@ -42,7 +49,10 @@ internal sealed partial class SheetComposer
 
         // One evaluator serves the whole sheet: its per-rule statistics are gathered once and
         // reused by every cell the rule covers, which a per-page evaluator would redo per page.
-        _conditional = new ConditionalFormatEvaluator(_sheet, FormulaEvaluator());
+        _conditional = new ConditionalFormatEvaluator(
+            _sheet,
+            FormulaEvaluator(),
+            evaluateRelative: RelativeFormulaEvaluator());
 
         List<ComposedPage> pages = Paginate(plan, grid);
 
@@ -51,6 +61,7 @@ internal sealed partial class SheetComposer
 
         Furnish(pages);
         ReportConditionalFormats(_conditional);
+        _comments?.Complete();
         return pages;
     }
 
@@ -61,6 +72,14 @@ internal sealed partial class SheetComposer
     private Func<string, CellRef, CellValue>? FormulaEvaluator() =>
         _context.Options.FormulaEvaluator is { } evaluate
             ? (formula, cell) => evaluate(_sheet, cell, formula)
+            : null;
+
+    /// <summary>
+    /// The caller's copy-aware formula engine, preserving the stored text as one cache key.
+    /// </summary>
+    private Func<string, CellRef, CellRef, CellValue>? RelativeFormulaEvaluator() =>
+        _context.Options.RelativeFormulaEvaluator is { } evaluate
+            ? (formula, anchor, cell) => evaluate(_sheet, anchor, cell, formula)
             : null;
 
     private ComposedPage NewPage(int within) => new(

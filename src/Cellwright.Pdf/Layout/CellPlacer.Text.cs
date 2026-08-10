@@ -31,26 +31,30 @@ internal sealed partial class CellPlacer
                 if (_covered.Contains((row, column)))
                     continue;
 
-                CellValue value = _sheet.Values.Get(row, column);
-                if (value.IsBlank)
-                    continue;
-
-                // A rule that shows only its icon or its bar means the number itself is not drawn.
-                if (HidesValue(row, column))
-                    continue;
-
-                CellStyle style = StyleOf(row, column);
-                TextAppearance appearance = _grid.Appearances.Of(style.Font);
-                CellText text = CellContent.Of(_context, value, style, appearance.Color);
-                if (text.IsEmpty)
-                    continue;
-
                 (double x, double y, double width, double height) = Box(c, r, row, column);
+                CellValue value = _sheet.Values.Get(row, column);
+                if (!value.IsBlank && !HidesValue(row, column))
+                {
+                    CellStyle style = StyleOf(row, column);
+                    TextAppearance appearance = _grid.Appearances.Of(style.Font);
+                    CellText text = CellContent.Of(_context, value, style, appearance.Color);
+                    if (!text.IsEmpty)
+                    {
+                        // An icon sits at the left edge, and the text starts after it rather than under it.
+                        double icon = IconRoom(row, column, height);
+                        var box = new CellBox(x + icon, y, width - icon, height, row, c);
+                        Draw(text, style, appearance with { Color = text.Color }, box, Tag(row, column));
+                    }
+                }
 
-                // An icon sits at the left edge, and the text starts after it rather than under it.
-                double icon = IconRoom(row, column, height);
-                var cell = new CellBox(x + icon, y, width - icon, height, row, c);
-                Draw(text, style, appearance with { Color = text.Color }, cell, Tag(row, column));
+                Comments?.AddAt(
+                    _page,
+                    new CellRef(row, column),
+                    x,
+                    y,
+                    width,
+                    height,
+                    Tag(row, column));
             }
         }
     }

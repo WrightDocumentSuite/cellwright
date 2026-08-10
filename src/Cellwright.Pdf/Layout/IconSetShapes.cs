@@ -18,6 +18,7 @@ internal static class IconSetShapes
     private static readonly PdfColor Grey = PdfColor.FromRgb(0xA5A5A5);
     private static readonly PdfColor Black = PdfColor.FromRgb(0x404040);
     private static readonly PdfColor Pink = PdfColor.FromRgb(0xE8908A);
+    private static readonly PdfColor Blue = PdfColor.FromRgb(0x5B9BD5);
 
     /// <summary>
     /// The icon a set shows for one band, or null when the set is not one this knows.
@@ -77,6 +78,20 @@ internal static class IconSetShapes
             "4Rating" or "5Rating" => (IconShape.Rating, Black, 0, (band + 1) / (double)count),
 
             "5Quarters" => (IconShape.Quarters, Black, 0, share),
+
+            "3Stars" => (IconShape.Star, Amber, 0, share),
+
+            "3Triangles" => band switch
+            {
+                0 => (IconShape.Triangle, Red, 180, 1),
+                1 => (IconShape.Dash, Amber, 0, 1),
+                _ => (IconShape.Triangle, Green, 0, 1),
+            },
+
+            "5Boxes" => (IconShape.Boxes, Blue, 0, share),
+
+            // x14 uses this sentinel when a custom band deliberately has no icon.
+            "NoIcons" => (IconShape.None, Black, 0, 0),
 
             _ => null,
         };

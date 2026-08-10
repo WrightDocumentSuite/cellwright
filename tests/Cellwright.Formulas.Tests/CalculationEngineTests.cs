@@ -190,6 +190,18 @@ public sealed class CalculationEngineTests
     }
 
     [Fact]
+    public void DefinedNameProgramsKeepCaseSensitiveStringLiteralsDistinct()
+    {
+        var book = Workbook.Create();
+        Worksheet sheet = book.Sheets.Add("S");
+        book.Names.Add("Lower", "\"a\"");
+        book.Names.Add("Upper", "\"A\"");
+
+        Assert.Equal("a", sheet.Evaluate("Lower").GetText());
+        Assert.Equal("A", sheet.Evaluate("Upper").GetText());
+    }
+
+    [Fact]
     public void SheetScopedName_ShadowsWorkbookName()
     {
         var book = Workbook.Create();
@@ -286,6 +298,23 @@ public sealed class CalculationEngineTests
         {
             return; // Cancellation observed, which is the point of the test.
         }
+    }
+
+    [Fact]
+    public void AdHocEvaluationDoesNotInheritCancellationFromThePreviousCalculation()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = book.Sheets.Add("S");
+        sheet["A1"] = 3;
+
+        using var cancellation = new CancellationTokenSource();
+        book.Calculate(new CalculateOptions { CancellationToken = cancellation.Token });
+        cancellation.Cancel();
+
+        Assert.Equal(3.0, sheet.EvaluateCopied(
+            "SUM(A1)",
+            new CellRef(1, 2),
+            new CellRef(1, 2)).GetNumber());
     }
 }
 

@@ -632,9 +632,19 @@ public sealed partial class XlsxReader
                     Markup.TableParts = await xml.ReadOuterXmlAsync().ConfigureAwait(false);
                     return;
                 case "extLst":
+                {
                     Flush();
-                    Markup.Extensions = await xml.ReadOuterXmlAsync().ConfigureAwait(false);
+                    string extensions = await xml.ReadOuterXmlAsync().ConfigureAwait(false);
+                    Markup.Extensions = extensions;
+                    Markup.ExtensionConditionalFormats =
+                        ConditionalFormatPart.ReadExtensionConditionalFormats(
+                            extensions,
+                            out IReadOnlySet<int>? extensionPriorities,
+                            out bool hasConditionalFormats);
+                    Markup.ExtensionConditionalFormatPriorities = extensionPriorities;
+                    Markup.HasExtensionConditionalFormats = hasConditionalFormats;
                     return;
+                }
                 default:
                     break;
             }

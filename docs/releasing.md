@@ -50,7 +50,7 @@ Inspect the build before it goes out. Check:
 
 ```bash
 dotnet pack Cellwright.slnx -c Release
-unzip -l artifacts/package/release/Cellwright.0.1.2.nupkg
+unzip -l artifacts/package/release/Cellwright.0.1.3.nupkg
 ```
 
 - `lib/net10.0/` contains both `.dll` and `.xml` — XML documentation is included
@@ -69,16 +69,16 @@ package instantly, so wait between layers and confirm the previous one is visibl
 
 ```bash
 # 1. Core.
-dotnet nuget push artifacts/package/release/Cellwright.0.1.2.nupkg \
+dotnet nuget push artifacts/package/release/Cellwright.0.1.3.nupkg \
   --source https://api.nuget.org/v3/index.json --api-key "$NUGET_PUB_UNPUB"
 
 # 2. Packages that depend only on core.
-dotnet nuget push artifacts/package/release/Cellwright.Formulas.0.1.2.nupkg ...
-dotnet nuget push artifacts/package/release/Cellwright.Mapping.0.1.2.nupkg ...
+dotnet nuget push artifacts/package/release/Cellwright.Formulas.0.1.3.nupkg ...
+dotnet nuget push artifacts/package/release/Cellwright.Mapping.0.1.3.nupkg ...
 
 # 3. Packages that depend on Formulas, and on Inkwright.
-dotnet nuget push artifacts/package/release/Cellwright.Xls.0.1.2.nupkg ...
-dotnet nuget push artifacts/package/release/Cellwright.Pdf.0.1.2.nupkg ...
+dotnet nuget push artifacts/package/release/Cellwright.Xls.0.1.3.nupkg ...
+dotnet nuget push artifacts/package/release/Cellwright.Pdf.0.1.3.nupkg ...
 ```
 
 The `.snupkg` follows its `.nupkg` on the same `push` automatically.
@@ -89,8 +89,8 @@ use an environment variable or a CI secret only.
 After publication — tag and GitHub release:
 
 ```bash
-git tag -a v0.1.2 -m "Cellwright 0.1.2"
-git push origin v0.1.2
+git tag -a v0.1.3 -m "Cellwright 0.1.3"
+git push origin v0.1.3
 ```
 
 ## Post-release verification
@@ -99,7 +99,7 @@ Install what was published into an empty project; do not trust the website alone
 
 ```bash
 mkdir /tmp/verify && cd /tmp/verify && dotnet new console
-dotnet add package Cellwright --version 0.1.2
+dotnet add package Cellwright --version 0.1.3
 dotnet build
 ```
 

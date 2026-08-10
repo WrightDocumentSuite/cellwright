@@ -1,4 +1,6 @@
+using Cellwright.Pdf.Layout;
 using Cellwright.Styles;
+using Inkwright;
 using Xunit;
 
 namespace Cellwright.Pdf.Tests;
@@ -9,6 +11,13 @@ namespace Cellwright.Pdf.Tests;
 /// </summary>
 public sealed class ConditionalFormatTests
 {
+    private readonly record struct IconSnapshot(IconShape Shape, double Angle, double Fraction);
+
+    private sealed record LayoutSnapshot(
+        IReadOnlyList<IconSnapshot> Icons,
+        IReadOnlyList<(string Text, double X)> Text,
+        IReadOnlyList<PdfExportWarning> Diagnostics);
+
     private static Worksheet Column(Workbook book, params double[] values)
     {
         Worksheet sheet = book.Sheets.Add("Sheet1");
@@ -17,6 +26,39 @@ public sealed class ConditionalFormatTests
 
         sheet.Column("A").SetWidth(20);
         return sheet;
+    }
+
+    private static LayoutSnapshot LayoutOf(Workbook book)
+    {
+        using PdfDocument document = PdfDocument.Create();
+        var context = new PdfExportContext(book, document, new PdfExportOptions());
+        IReadOnlyList<PageItem> items = new WorkbookComposer(context)
+            .Compose()
+            .SelectMany(static page => page.Items)
+            .ToArray();
+
+        return new LayoutSnapshot(
+            [.. items.OfType<IconItem>().Select(static item =>
+                new IconSnapshot(item.Shape, item.Angle, item.Fraction))],
+            [.. items.OfType<TextItem>().Select(static item => (item.Text, item.X))],
+            [.. context.Diagnostics]);
+    }
+
+    private static Workbook IconBook(string name, int count)
+    {
+        Workbook book = Workbook.Create();
+        double[] values = Enumerable.Range(0, count)
+            .Select(index => count == 1 ? 0 : index * 100.0 / (count - 1))
+            .ToArray();
+        Worksheet sheet = Column(book, values);
+        sheet.ConditionalFormats.Add(ConditionalFormatRule.Icons(
+            $"A1:A{count}",
+            new IconSet
+            {
+                Name = name,
+                Values = [.. values.Select(static value => ConditionalValue.Percent(value))],
+            }));
+        return book;
     }
 
     /// <summary>How many times a colour is set as a fill in the page's operators.</summary>
@@ -49,6 +91,24 @@ public sealed class ConditionalFormatTests
 
         // Pure red is painted exactly once: for the cell that passed, not for the one that did not.
         Assert.Equal(1, FillsOf(rendered, 1, 0, 0));
+    }
+
+    [Fact]
+    public void AContainsBlanksRulePaintsAnOtherwiseEmptyPrintArea()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = book.Sheets.Add("Sheet1");
+        sheet.SetPrintArea("A1:A2");
+        sheet.ConditionalFormats.Add(new ConditionalFormatRule
+        {
+            Ranges = [RangeRef.Parse("A1:A2")],
+            Type = ConditionalFormatType.ContainsBlanks,
+            Style = new DifferentialStyle { FillColor = ExcelColor.FromRgb(0xFF, 0x00, 0x00) },
+        });
+
+        using Rendered rendered = Rendered.Of(book);
+
+        Assert.Equal(2, FillsOf(rendered, 1, 0, 0));
     }
 
     [Fact]
@@ -102,7 +162,12 @@ public sealed class ConditionalFormatTests
         Workbook book = Workbook.Create();
         Worksheet sheet = Column(book, 0, 100);
         sheet.ConditionalFormats.Add(ConditionalFormatRule.Bars(
-            "A1:A2", new DataBar { Color = ExcelColor.FromRgb(0x00, 0xFF, 0x00) }));
+            "A1:A2", new DataBar
+            {
+                Color = ExcelColor.FromRgb(0x00, 0xFF, 0x00),
+                MinimumLength = 0,
+                MaximumLength = 100,
+            }));
 
         using Rendered rendered = Rendered.Of(book);
 
@@ -125,6 +190,107 @@ public sealed class ConditionalFormatTests
         Assert.DoesNotContain(
             rendered.Diagnostics,
             warning => warning.Subject?.StartsWith("icon-set", StringComparison.Ordinal) == true);
+    }
+
+    [Theory]
+    [InlineData("3Stars", 3, "Star,Star,Star")]
+    [InlineData("3Triangles", 3, "Triangle,Dash,Triangle")]
+    [InlineData("5Boxes", 5, "Boxes,Boxes,Boxes,Boxes,Boxes")]
+    public void ExtendedIconSetsUseTheirOwnShapesAndRenderWithoutAFallback(
+        string name, int count, string expectedShapes)
+    {
+        Workbook book = IconBook(name, count);
+
+        LayoutSnapshot layout = LayoutOf(book);
+        Assert.Equal(expectedShapes, string.Join(",", layout.Icons.Select(static icon => icon.Shape)));
+        Assert.DoesNotContain(
+            layout.Diagnostics,
+            warning => warning.Subject?.StartsWith("icon-set", StringComparison.Ordinal) == true);
+
+        // Exercise the painters too, without coupling the test to PDF drawing operators.
+        using Rendered rendered = Rendered.Of(book);
+        Assert.DoesNotContain(
+            rendered.Diagnostics,
+            warning => warning.Subject?.StartsWith("icon-set", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public void TriangleBandsPointDownStayLevelAndPointUp()
+    {
+        LayoutSnapshot layout = LayoutOf(IconBook("3Triangles", 3));
+
+        Assert.Equal(180, layout.Icons[0].Angle);
+        Assert.Equal(IconShape.Dash, layout.Icons[1].Shape);
+        Assert.Equal(0, layout.Icons[2].Angle);
+    }
+
+    [Fact]
+    public void StarsAndBoxesProgressFromEmptyToFull()
+    {
+        LayoutSnapshot stars = LayoutOf(IconBook("3Stars", 3));
+        LayoutSnapshot boxes = LayoutOf(IconBook("5Boxes", 5));
+
+        Assert.Equal(new double[] { 0, 0.5, 1 }, stars.Icons.Select(static icon => icon.Fraction));
+        Assert.Equal(
+            new double[] { 0, 0.25, 0.5, 0.75, 1 },
+            boxes.Icons.Select(static icon => icon.Fraction));
+    }
+
+    [Fact]
+    public void NoIconsNeitherDrawsAnIconNorIndentsTheCellText()
+    {
+        Workbook plain = Workbook.Create();
+        Worksheet plainSheet = plain.Sheets.Add("Sheet1");
+        plainSheet["A1"] = "label";
+        plainSheet.Column("A").SetWidth(20);
+
+        Workbook suppressed = Workbook.Create();
+        Worksheet suppressedSheet = suppressed.Sheets.Add("Sheet1");
+        suppressedSheet["A1"] = "label";
+        suppressedSheet.Column("A").SetWidth(20);
+        suppressedSheet.ConditionalFormats.Add(ConditionalFormatRule.Icons("A1", new IconSet
+        {
+            Name = "NoIcons",
+            Values = [ConditionalValue.Percent(0)],
+        }));
+
+        LayoutSnapshot withoutIcon = LayoutOf(plain);
+        LayoutSnapshot withSuppressedIcon = LayoutOf(suppressed);
+
+        Assert.Empty(withSuppressedIcon.Icons);
+        Assert.Single(withoutIcon.Text);
+        Assert.Single(withSuppressedIcon.Text);
+        Assert.InRange(
+            Math.Abs(withoutIcon.Text[0].X - withSuppressedIcon.Text[0].X),
+            0,
+            0.000001);
+        Assert.DoesNotContain(
+            withSuppressedIcon.Diagnostics,
+            warning => warning.Subject?.StartsWith("icon-set", StringComparison.Ordinal) == true);
+
+        using Rendered rendered = Rendered.Of(suppressed);
+        Assert.Contains("label", rendered.Text(), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            rendered.Diagnostics,
+            warning => warning.Subject?.StartsWith("icon-set", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public void ExistingIconSetsRemainMapped()
+    {
+        string[] names =
+        [
+            "3Arrows", "3ArrowsGray", "3Flags", "3TrafficLights1", "3TrafficLights2", "3Signs",
+            "3Symbols", "3Symbols2", "4Arrows", "4ArrowsGray", "4RedToBlack", "4Rating",
+            "4TrafficLights", "5Arrows", "5ArrowsGray", "5Quarters", "5Rating",
+        ];
+
+        foreach (string name in names)
+        {
+            int count = name[0] - '0';
+            Assert.NotNull(IconSetShapes.Of(name, 0, count));
+            Assert.NotEqual(IconShape.None, IconSetShapes.Of(name, 0, count)?.Shape);
+        }
     }
 
     [Fact]
@@ -201,6 +367,38 @@ public sealed class ConditionalFormatTests
         Assert.DoesNotContain(
             rendered.Diagnostics,
             warning => warning.Subject == "conditional-format-formula");
+    }
+
+    [Fact]
+    public void PrintingOneWorksheetKeepsTheRelativeFormulaEvaluator()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = Column(book, 500);
+        sheet.ConditionalFormats.Add(ConditionalFormatRule.Expression(
+            "A1", "$A1>100", new DifferentialStyle { FillColor = ExcelColor.FromRgb(0xFF, 0x00, 0x00) }));
+
+        int calls = 0;
+        var options = new PdfExportOptions
+        {
+            RelativeFormulaEvaluator = (worksheet, anchor, cell, formula) =>
+            {
+                calls++;
+                Assert.Same(sheet, worksheet);
+                Assert.Equal(CellRef.Parse("A1"), anchor);
+                Assert.Equal(CellRef.Parse("A1"), cell);
+                Assert.Equal("$A1>100", formula);
+                return CellValue.Boolean(true);
+            },
+        };
+
+        PdfExportResult result = sheet.ToPdf(options);
+        using (result.Document)
+        {
+            Assert.True(calls > 0);
+            Assert.DoesNotContain(
+                result.Diagnostics,
+                warning => warning.Subject == "conditional-format-formula");
+        }
     }
 
     [Fact]

@@ -118,6 +118,38 @@ public sealed class GridTests
     }
 
     [Fact]
+    public void AStyleOnABlankCellStillPaintsItsFillAndBorder()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = Sheet(book);
+        sheet.SetPrintArea("A1:A3");
+        sheet.Cell("A2").SetStyle(CellStyle.Default with
+        {
+            Fill = FillStyle.Solid(ExcelColor.FromRgb(255, 0, 0)),
+            Border = BorderStyle.All(new BorderEdge(BorderLineStyle.Thin, ExcelColor.FromRgb(0, 0, 255))),
+        });
+
+        using Rendered rendered = Rendered.Of(book);
+        string content = rendered.Content();
+
+        Assert.Contains("1 0 0 rg", content, StringComparison.Ordinal);
+        Assert.Contains("0 0 1 RG", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GridLinesStillPrintAcrossAnOtherwiseBlankArea()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = Sheet(book);
+        sheet.SetPrintArea("A1:B2");
+        sheet.PageSetup.PrintGridLines = true;
+
+        using Rendered rendered = Rendered.Of(book);
+
+        Assert.Contains("\nS\n", rendered.Content(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheGridIsPrintedOnlyWhenTheSheetAsksForIt()
     {
         Workbook plain = Workbook.Create();

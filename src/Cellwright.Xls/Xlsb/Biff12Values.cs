@@ -22,14 +22,20 @@ internal static class Biff12Values
     /// Reads an <c>XLWideString</c> (MS-XLSB 2.5.169): four bytes of character count, then the
     /// characters. Advances <paramref name="offset"/> past the whole thing.
     /// </summary>
-    public static string ReadString(ReadOnlySpan<byte> body, ref int offset) =>
-        ReadNullableString(body, ref offset) ?? "";
+    public static string ReadString(
+        ReadOnlySpan<byte> body,
+        ref int offset,
+        DocumentLoadBudgetState? loadBudget = null) =>
+        ReadNullableString(body, ref offset, loadBudget) ?? "";
 
     /// <summary>
     /// Reads an <c>XLNullableWideString</c> (MS-XLSB 2.5.167), whose count may say that there
     /// is no string at all — which is how an absent relationship id is written, among others.
     /// </summary>
-    public static string? ReadNullableString(ReadOnlySpan<byte> body, ref int offset)
+    public static string? ReadNullableString(
+        ReadOnlySpan<byte> body,
+        ref int offset,
+        DocumentLoadBudgetState? loadBudget = null)
     {
         if (offset + 4 > body.Length)
         {
@@ -48,6 +54,7 @@ internal static class Biff12Values
         if (bytes <= 0)
             return "";
 
+        loadBudget?.EnsureCellTextLength(bytes / 2);
         string text = Encoding.Unicode.GetString(body.Slice(offset, (int)bytes));
         offset += (int)bytes;
         return text;

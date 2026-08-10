@@ -19,6 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Cellwright\Cellwright.csproj" />
     <ProjectReference Include="..\..\src\Cellwright.Pdf\Cellwright.Pdf.csproj" />
+    <PackageReference Include="Inkwright.Layout" />
   </ItemGroup>
 
 </Project>

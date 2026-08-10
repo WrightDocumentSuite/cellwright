@@ -119,14 +119,19 @@ it is storage `_VBA_PROJECT_CUR` next to the workbook stream. Inside is storage 
 
 ## A file you do not trust
 
-Extracting macros is usually parsing an uploaded document, so decompression is capped: six bytes of
-compressed chunk expand to four thousand, and a file built to abuse that would turn megabytes into
-gigabytes. A stream over 64 MiB — two orders of magnitude above the largest real project — is not
-read further; instead of `OutOfMemoryException` you get `XlsFormatException` with an explanation.
+Extracting macros is usually parsing an uploaded document, so decompression has two layers of
+limits: six bytes of compressed chunk can expand to four thousand, and a file built to abuse that
+would turn megabytes into gigabytes. Directory and module output contributes to the caller's
+`DocumentLoadBudget.MaxInflatedBytes` and observes `MaxPartBytes`; a policy breach is a
+`DocumentLoadLimitException` with machine-readable fields. The independent 64 MiB codec guard — two
+orders of magnitude above the largest real project — remains even for an unlimited outer budget and
+reports an explanatory `XlsFormatException`. Decompression and directory parsing observe the load
+cancellation token.
 
 Reading the package does not buffer the whole file: one part is taken from the zip even when the
 book weighs hundreds of megabytes. The MS-CFB container must stay in memory — its sectors are
-scattered and the directory addresses them by offset.
+scattered and the directory addresses them by offset. OPC and nested VBA CFB/codec work use one
+shared state during `VbaProject.LoadAsync`.
 
 ## Limitations
 

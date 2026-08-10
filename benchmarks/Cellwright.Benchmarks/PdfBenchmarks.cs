@@ -15,6 +15,7 @@ namespace Cellwright.Benchmarks;
 public class PdfBenchmarks
 {
     private Workbook _plain = null!;
+    private Workbook _sparse = null!;
     private Workbook _styled = null!;
     private Workbook _conditional = null!;
     private Workbook _graded = null!;
@@ -27,6 +28,7 @@ public class PdfBenchmarks
     public void Setup()
     {
         _plain = Build(styled: false);
+        _sparse = BuildSparse();
         _styled = Build(styled: true);
 
         // A rule per column of numbers, the shape a report actually carries.
@@ -49,6 +51,10 @@ public class PdfBenchmarks
     [Benchmark(Baseline = true)]
     public int Plain() => Render(_plain, tagged: false);
 
+    /// <summary>An explicit print area whose logical cells are almost all empty.</summary>
+    [Benchmark]
+    public int Sparse() => Render(_sparse, tagged: false);
+
     [Benchmark]
     public int Styled() => Render(_styled, tagged: false);
 
@@ -68,6 +74,16 @@ public class PdfBenchmarks
         PdfExportResult result = PdfExporter.Render(book, new PdfExportOptions { Tagged = tagged });
         using PdfDocument pdf = result.Document;
         return result.PageCount;
+    }
+
+    private Workbook BuildSparse()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = book.Sheets.Add("Data");
+        sheet["A1"] = "Only occupied cell";
+        sheet.SetPrintArea($"A1:E{Rows}");
+        sheet.PageSetup.PrintGridLines = false;
+        return book;
     }
 
     private Workbook Build(bool styled)

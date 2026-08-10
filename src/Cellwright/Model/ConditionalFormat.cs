@@ -116,6 +116,28 @@ public enum ConditionalValueType
 /// <param name="Value">Number or formula text, unused by <see cref="ConditionalValueType.Minimum"/> and <see cref="ConditionalValueType.Maximum"/>.</param>
 public readonly record struct ConditionalValue(ConditionalValueType Type, string? Value = null)
 {
+    private readonly bool _excludeEqual;
+
+    /// <summary>
+    /// For an icon-set threshold, whether a value exactly on this stop belongs to the band
+    /// beginning here. The default is inclusive; the property has no meaning for colour-scale
+    /// and data-bar stops.
+    /// </summary>
+    /// <remarks>
+    /// This is deliberately not a third positional record parameter: retaining the original
+    /// two-argument constructor and <c>Deconstruct</c> preserves the managed construction and
+    /// deconstruction API. The added flag is still an instance field; stable physical/native
+    /// layout and field-based serialization are not part of this API contract.
+    ///
+    /// Stored inverted so <c>default(ConditionalValue)</c> keeps the historic inclusive
+    /// minimum semantics; struct field initializers do not run for <c>default</c> values.
+    /// </remarks>
+    public bool GreaterThanOrEqual
+    {
+        get => !_excludeEqual;
+        init => _excludeEqual = !value;
+    }
+
     /// <summary>The lowest value of the range.</summary>
     public static ConditionalValue Minimum => new(ConditionalValueType.Minimum);
 
@@ -171,8 +193,20 @@ public sealed record DataBar
     /// <summary>Bar color.</summary>
     public ExcelColor Color { get; init; } = ExcelColor.FromRgb(0x63, 0x8E, 0xC6);
 
+    /// <summary>Length of the shortest bar, as a percentage of the cell width.</summary>
+    public int MinimumLength { get; init; } = 10;
+
+    /// <summary>Length of the longest bar, as a percentage of the cell width.</summary>
+    public int MaximumLength { get; init; } = 90;
+
     /// <summary>Whether the number stays visible next to the bar.</summary>
     public bool ShowValue { get; init; } = true;
+
+    /// <summary>Whether the two percentages satisfy the SpreadsheetML constraints.</summary>
+    internal bool HasValidLengths =>
+        MinimumLength is >= 0 and <= 100 &&
+        MaximumLength is >= 0 and <= 100 &&
+        MinimumLength <= MaximumLength;
 }
 
 /// <summary>Icons chosen by which band a value falls in.</summary>

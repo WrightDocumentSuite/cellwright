@@ -105,24 +105,25 @@ relationship targets), OpenDocument, `.docx`, `.pptx`, and plain zip without `[C
 
 ## Foreign files as hostile input
 
-Zip reports how large each entry expands to and is not obliged to tell the truth. A crafted package
-can turn megabytes on disk into unbounded memory. `LoadOptions.Limits` caps a single part (512 MiB
-by default) and their sum (2 GiB) — numbers far above any real workbook, so normal use never hits
-them while a forgery gets a message instead of `OutOfMemoryException`. `PackageLimits.None`
-removes the caps for a file you trust.
+`DocumentLoadBudget` is the one resource policy for XLSX, XLSB and legacy XLS. It bounds source
+bytes, package entries and expansion, XML work, cells and stored text, media, and embedded objects.
+The mutable counters are shared across one import, including a CFB project nested in an OPC part;
+a parser cannot reset a total by crossing a format boundary. `Spreadsheet` reuses the package it
+opened for format detection, and encrypted CFB→OPC loads keep that same state. Breaches are
+`DocumentLoadLimitException` with stable `LimitName`, `Limit`, and `Observed` fields.
 
-The per-part limit is enforced on actually unpacked bytes even for streaming parts: the zip
-`Length` field cannot be trusted. The total budget counts parts that stay in memory: styles, the
-string table, comments, and anything carried as raw bytes. Worksheets stream through the reader and
-are never buffered, so a workbook with millions of rows does not count toward the aggregate budget.
+ZIP central-directory metrics are checked before part allocation and actual streamed bytes reconcile
+both per-part and total-inflated guards. OPC media/embedding classification follows content types and relationship
+roles, with conventional folders only as fallback. CFB FAT, DIFAT, miniFAT, directory and stream
+metrics are checked before allocation; a loop or short chain remains format corruption.
 
-`Cellwright.Xls` applies the same limits through `XlsLoadOptions.Limits` to the whole binary file
-and each CFB stream. FAT, DIFAT, and miniFAT are validated before allocation; a loop or chain
-shorter than the declared size is treated as format corruption.
+The old `PackageLimits` properties are a compatibility facade. `PackageLimits.None` still means
+an unlimited import, but new code should raise only the necessary `DocumentLoadBudget` ceiling. The
+full contract and defaults are in [loading-untrusted-input.md](loading-untrusted-input.md).
 
 The same rule governs macro decompression: six compressed bytes can expand to four thousand, with
-its own limit (see [vba.md](vba.md)). XML is parsed with DTD disabled, so external entities cannot
-exist by construction.
+its own codec guard under the outer document budget (see [vba.md](vba.md)). XML is parsed with DTD
+disabled, so external entities cannot exist by construction.
 
 Long recalculation can be cancelled through `CalculateOptions.CancellationToken` — the engine
 checks it between cells.

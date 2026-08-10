@@ -70,7 +70,8 @@ internal static class WorksheetCopier
         foreach (Hyperlink link in source.Hyperlinks)
             target.Hyperlinks.Add(link.Clone());
         foreach (CellComment comment in source.Comments)
-            target.Comments.Add(comment.Cell, comment.Text, comment.Author);
+            target.Comments.Add(comment.Cell, comment.Text, comment.Author).RevisionUid = comment.RevisionUid;
+        CopyThreadedComments(source, target);
         foreach (DataValidation validation in source.Validations)
             target.Validations.Add(validation.Clone());
         foreach (ConditionalFormatRule rule in source.ConditionalFormats)
@@ -79,6 +80,63 @@ internal static class WorksheetCopier
             target.Tables.Add(Rename(table, UniqueTableName(target.Workbook, table.Name)));
         foreach (Picture picture in source.Pictures)
             target.Pictures.Add(Clone(picture));
+    }
+
+    /// <summary>
+    /// Copies conversations without letting message identities cross between sheets. Authors are
+    /// workbook-wide and therefore keep their person ids; messages and parent links are local to
+    /// the new threaded-comments part and receive a fresh, internally consistent id graph.
+    /// </summary>
+    private static void CopyThreadedComments(Worksheet source, Worksheet target)
+    {
+        if (source.ThreadedComments.Count == 0)
+            return;
+
+        target.ThreadedComments.ExtensionListXml = source.ThreadedComments.ExtensionListXml;
+
+        var occupiedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Worksheet sheet in target.Workbook.Sheets)
+        {
+            foreach (ThreadedComment comment in sheet.ThreadedComments)
+                occupiedIds.Add(comment.Id);
+        }
+
+        var newIds = new Dictionary<ThreadedComment, string>();
+        var parentIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (ThreadedComment comment in source.ThreadedComments)
+        {
+            string id;
+            do
+            {
+                id = Person.NewId();
+            }
+            while (!occupiedIds.Add(id));
+
+            newIds.Add(comment, id);
+            // Match Threads' handling of malformed duplicate ids: a reply names the first message
+            // with that id. Valid files simply take the ordinary one-to-one path.
+            parentIds.TryAdd(comment.Id, id);
+        }
+
+        foreach (ThreadedComment comment in source.ThreadedComments)
+        {
+            target.ThreadedComments.AddFromFile(new ThreadedComment
+            {
+                Cell = comment.Cell,
+                Text = comment.Text,
+                PersonId = comment.PersonId,
+                Id = newIds[comment],
+                ParentId = comment.ParentId is { } parent && parentIds.TryGetValue(parent, out string? mapped)
+                    ? mapped
+                    : null,
+                Created = comment.Created,
+                Resolved = comment.Resolved,
+                MentionsXml = comment.MentionsXml,
+                ExtensionListXml = comment.ExtensionListXml,
+            });
+        }
+
+        target.ThreadedComments.MarkModified();
     }
 
     /// <summary>

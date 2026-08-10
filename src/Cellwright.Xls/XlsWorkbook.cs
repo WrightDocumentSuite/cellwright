@@ -39,8 +39,10 @@ public static class XlsWorkbook
         ArgumentNullException.ThrowIfNull(stream);
         options ??= new XlsLoadOptions();
 
-        byte[] bytes = await ReadAllAsync(stream, options.LeaveOpen, options.Limits, cancellationToken).ConfigureAwait(false);
-        return XlsWorkbookReader.Read(bytes, options);
+        DocumentLoadBudget budget = options.EffectiveBudget;
+        byte[] bytes = await ReadAllAsync(stream, options.LeaveOpen, budget, cancellationToken).ConfigureAwait(false);
+        return XlsWorkbookReader.Read(
+            bytes, options, new DocumentLoadBudgetState(budget), cancellationToken);
     }
 
     /// <summary>Writes a workbook to a file in the Excel 97-2003 format.</summary>
@@ -95,40 +97,19 @@ public static class XlsWorkbook
     /// the front points at byte offsets — so there is no reading it as it arrives.
     /// </summary>
     internal static async ValueTask<byte[]> ReadAllAsync(
-        Stream stream, bool leaveOpen, PackageLimits limits, CancellationToken cancellationToken)
+        Stream stream, bool leaveOpen, DocumentLoadBudget budget, CancellationToken cancellationToken)
     {
         try
         {
             if (stream is MemoryStream memory && memory.TryGetBuffer(out ArraySegment<byte> buffer) &&
                 buffer.Offset == 0 && buffer.Count == buffer.Array!.Length)
             {
-                EnsureInputFits(buffer.Count, limits);
+                DocumentLoadBudgetState.Ensure(
+                    nameof(DocumentLoadBudget.MaxInputBytes), budget.MaxInputBytes, buffer.Count);
                 return buffer.Array;
             }
 
-            long remaining = stream.CanSeek ? Math.Max(0, stream.Length - stream.Position) : 0;
-            if (stream.CanSeek)
-                EnsureInputFits(remaining, limits);
-
-            using var copy = stream.CanSeek && remaining <= int.MaxValue
-                ? new MemoryStream((int)remaining)
-                : new MemoryStream();
-            byte[] chunk = System.Buffers.ArrayPool<byte>.Shared.Rent(81920);
-            try
-            {
-                int read;
-                while ((read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
-                {
-                    EnsureInputFits((long)copy.Length + read, limits);
-                    await copy.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                }
-            }
-            finally
-            {
-                System.Buffers.ArrayPool<byte>.Shared.Return(chunk);
-            }
-
-            return copy.ToArray();
+            return await DocumentInput.ReadBytesAsync(stream, budget, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -137,14 +118,4 @@ public static class XlsWorkbook
         }
     }
 
-    private static void EnsureInputFits(long size, PackageLimits limits)
-    {
-        long limit = Math.Min(limits.MaxTotalSize, int.MaxValue);
-        if (size > limit)
-        {
-            throw new XlsFormatException(
-                $"The binary workbook is {size} bytes, past the {limit}-byte input limit. " +
-                "Raise XlsLoadOptions.Limits if the file is genuinely this large.");
-        }
-    }
 }

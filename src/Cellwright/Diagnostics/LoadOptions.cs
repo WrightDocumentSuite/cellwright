@@ -7,6 +7,9 @@ public sealed record LoadOptions
 {
     internal static readonly LoadOptions Default = new();
 
+    private DocumentLoadBudget _budget = DocumentLoadBudget.Default;
+    private PackageLimits? _legacyLimits;
+
     /// <summary>Keep the source stream open after loading. Ignored for file paths.</summary>
     public bool LeaveOpen { get; init; }
 
@@ -25,11 +28,31 @@ public sealed record LoadOptions
     public Action<WorkbookWarning>? OnWarning { get; init; }
 
     /// <summary>
-    /// What the package is allowed to cost in memory while it is read. The defaults sit far
-    /// above any real workbook and are what makes accepting a file from a stranger safe;
-    /// <see cref="PackageLimits.None"/> removes them for a file you trust.
+    /// Shared ceilings for source bytes, package expansion, XML, cells, media and embedded
+    /// objects. A finite budget is applied by default.
     /// </summary>
-    public PackageLimits Limits { get; init; } = PackageLimits.Default;
+    public DocumentLoadBudget Budget
+    {
+        get => EffectiveBudget;
+        init
+        {
+            _budget = value ?? throw new ArgumentNullException(nameof(value));
+            _legacyLimits = null;
+        }
+    }
+
+    /// <summary>
+    /// Compatibility view of the former package-only limits. Setting it updates input,
+    /// per-part and total-inflated ceilings in <see cref="Budget"/>; new code should configure
+    /// <see cref="Budget"/> directly.
+    /// </summary>
+    public PackageLimits Limits
+    {
+        get => _legacyLimits ?? PackageLimits.From(_budget);
+        init => _legacyLimits = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    internal DocumentLoadBudget EffectiveBudget => _legacyLimits?.ApplyTo(_budget) ?? _budget;
 }
 
 /// <summary>

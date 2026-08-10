@@ -27,6 +27,7 @@ await book.SaveAsync("sales.xlsx");
 Workbook book = await Workbook.LoadAsync("sales.xlsx", new LoadOptions
 {
     OnWarning = w => Console.WriteLine(w),   // diagnostics for recoverable issues
+    Budget = DocumentLoadBudget.Default,     // finite safety ceilings are also the default
 });
 
 Worksheet sheet = book.Sheets["Sales"];
@@ -35,6 +36,10 @@ sheet["C1"] = "Updated";
 
 await book.SaveAsync("sales-updated.xlsx");
 ```
+
+For uploads and other caller-controlled files, see
+[Loading untrusted spreadsheets](loading-untrusted-input.md) for the shared XLSX/XLS budget and
+machine-readable limit failures.
 
 `CellValue` is a compact tagged union: inspect the kind with `IsNumber`/`IsText`/... and read
 with `GetNumber()`/`GetText()`/`TryGetNumber(...)`. Implicit conversions exist for all

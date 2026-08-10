@@ -13,8 +13,13 @@ internal sealed class Evaluator
     private FormulaValue[] _locals = [];
     private int _top;
 
-    /// <summary>Evaluates the program in the context's current cell.</summary>
-    public FormulaValue Evaluate(FormulaProgram program, EvalContext context)
+    /// <summary>
+    /// Evaluates the program in the context's current cell, optionally as a formula copied by
+    /// the supplied row and column offsets. The immutable program remains shared; references are
+    /// shifted as value types while their instructions are executed.
+    /// </summary>
+    public FormulaValue Evaluate(
+        FormulaProgram program, EvalContext context, int rowDelta = 0, int columnDelta = 0)
     {
         _top = 0;
         EnsureCapacity(program.MaxStackDepth);
@@ -22,12 +27,17 @@ internal sealed class Evaluator
             _locals = new FormulaValue[program.LocalNames.Length];
 
         foreach (Instruction instruction in program.Instructions)
-            Step(program, instruction, context);
+            Step(program, instruction, context, rowDelta, columnDelta);
 
         return _top == 1 ? _stack[0] : FormulaValue.Error(ExcelError.Value);
     }
 
-    private void Step(FormulaProgram program, Instruction instruction, EvalContext context)
+    private void Step(
+        FormulaProgram program,
+        Instruction instruction,
+        EvalContext context,
+        int rowDelta,
+        int columnDelta)
     {
         switch (instruction.Code)
         {
@@ -47,7 +57,7 @@ internal sealed class Evaluator
                 Push(FormulaValue.Blank);
                 break;
             case OpCode.PushReference:
-                PushReference(program.References[instruction.Operand], context);
+                PushReference(program.References[instruction.Operand], context, rowDelta, columnDelta);
                 break;
             case OpCode.PushName:
                 Push(NameResolver.Resolve(program.Strings[instruction.Operand], context));
@@ -83,17 +93,22 @@ internal sealed class Evaluator
         }
     }
 
-    private void PushReference(in FormulaRef reference, EvalContext context)
+    private void PushReference(
+        in FormulaRef reference, EvalContext context, int rowDelta, int columnDelta)
     {
+        FormulaRef shifted = rowDelta == 0 && columnDelta == 0
+            ? reference
+            : reference.Shift(rowDelta, columnDelta);
+
         // A cell of another workbook has no worksheet behind it; its cached values arrive as
         // a plain value or array instead of a reference.
-        if (reference.IsExternal)
+        if (shifted.IsExternal)
         {
-            Push(context.ResolveExternal(reference));
+            Push(context.ResolveExternal(shifted));
             return;
         }
 
-        ReferenceValue? resolved = context.Resolve(reference);
+        ReferenceValue? resolved = context.Resolve(shifted);
         Push(resolved is null ? FormulaValue.Error(ExcelError.Reference) : FormulaValue.Reference(resolved));
     }
 

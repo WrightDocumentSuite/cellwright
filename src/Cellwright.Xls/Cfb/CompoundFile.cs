@@ -58,16 +58,19 @@ internal sealed class CompoundFile
     /// <exception cref="XlsFormatException">The header, allocation tables or directory are unusable.</exception>
     public static CompoundFile Parse(byte[] data, PackageLimits? limits = null)
     {
-        ArgumentNullException.ThrowIfNull(data);
         limits ??= PackageLimits.Default;
-        if (limits.MaxPartSize < 0 || limits.MaxTotalSize < 0)
-            throw new ArgumentOutOfRangeException(nameof(limits), "Package limits cannot be negative.");
-        if (data.LongLength > limits.MaxTotalSize)
-        {
-            throw new XlsFormatException(
-                $"The compound file is {data.LongLength} bytes, past the {limits.MaxTotalSize}-byte input limit. " +
-                "Raise XlsLoadOptions.Limits if the file is genuinely this large.");
-        }
+        return Parse(data, limits.ApplyTo(DocumentLoadBudget.Default));
+    }
+
+    /// <summary>Parses a container under the shared spreadsheet load budget.</summary>
+    internal static CompoundFile Parse(
+        byte[] data, DocumentLoadBudget budget, DocumentLoadBudgetState? loadBudget = null)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        ArgumentNullException.ThrowIfNull(budget);
+        loadBudget ??= new DocumentLoadBudgetState(budget);
+        DocumentLoadBudgetState.Ensure(
+            nameof(DocumentLoadBudget.MaxInputBytes), budget.MaxInputBytes, data.LongLength);
 
         if (!HasSignature(data))
             throw new XlsFormatException("The file does not start with the compound file signature.");
@@ -117,20 +120,87 @@ internal sealed class CompoundFile
         uint[] fat = ReadFat(
             data, sectorSize, header, firstDifatSector, difatCount, fatCount, availableSectors);
         List<DirectoryEntry> directory = ReadDirectory(
-            data, sectorSize, fat, firstDirectorySector, majorVersion, limits.MaxPartSize);
+            data,
+            sectorSize,
+            fat,
+            firstDirectorySector,
+            majorVersion,
+            budget.MaxPartBytes,
+            budget.MaxPackageParts);
         uint[] miniFat = ReadChainAsSectorNumbers(
-            data, sectorSize, fat, firstMiniFatSector, miniFatCount, limits.MaxPartSize);
+            data, sectorSize, fat, firstMiniFatSector, miniFatCount, budget.MaxPartBytes);
 
         // The mini stream lives inside the root entry, and every small stream is carved out of it.
         DirectoryEntry root = directory.Count > 0
             ? directory[0]
             : throw new XlsFormatException("The compound file has no root directory entry.");
-        long miniStreamLength = CheckedStreamLength(root.Length, limits.MaxPartSize, "root mini stream");
+        long miniStreamLength = CheckedStreamLength(root.Length, budget.MaxPartBytes, "root mini stream");
         byte[] miniStream = ReadChain(
-            data, sectorSize, fat, root.StartSector, miniStreamLength, limits.MaxPartSize, "root mini stream");
+            data, sectorSize, fat, root.StartSector, miniStreamLength, budget.MaxPartBytes, "root mini stream");
 
-        return new CompoundFile(
-            data, sectorSize, miniSectorSize, fat, miniFat, directory, miniStream, miniStreamCutoff, limits.MaxPartSize);
+        var container = new CompoundFile(
+            data, sectorSize, miniSectorSize, fat, miniFat, directory, miniStream, miniStreamCutoff, budget.MaxPartBytes);
+        container.ValidateBudget(loadBudget);
+        return container;
+    }
+
+    private void ValidateBudget(DocumentLoadBudgetState loadBudget)
+    {
+        loadBudget.AddPackageParts(_directory.Count);
+        long inflated = 0;
+        foreach (DirectoryEntry entry in _directory)
+        {
+            if (entry.Kind != DirectoryEntryKind.Stream)
+                continue;
+
+            long length = entry.Length > long.MaxValue ? long.MaxValue : (long)entry.Length;
+            DocumentLoadBudgetState.Ensure(
+                nameof(DocumentLoadBudget.MaxPartBytes), loadBudget.Budget.MaxPartBytes, length);
+            inflated = DocumentLoadBudgetState.AddWithoutOverflow(inflated, length);
+        }
+        loadBudget.AddInflatedBytes(inflated);
+
+        int objectPool = FindIndex(["ObjectPool"]);
+        if (objectPool < 0)
+            return;
+
+        foreach (int child in Subtree(_directory[objectPool].Child))
+        {
+            DirectoryEntry candidate = _directory[child];
+            long bytes = candidate.Kind == DirectoryEntryKind.Stream
+                ? candidate.Length > long.MaxValue ? long.MaxValue : (long)candidate.Length
+                : DescendantStreamBytes(candidate.Child);
+            loadBudget.AddEmbeddedObject(bytes);
+        }
+    }
+
+    private long DescendantStreamBytes(uint child)
+    {
+        long total = 0;
+        var pending = new Stack<uint>();
+        var seen = new HashSet<int>();
+        pending.Push(child);
+        while (pending.TryPop(out uint siblingRoot))
+        {
+            foreach (int index in Subtree(siblingRoot))
+            {
+                if (!seen.Add(index))
+                    continue;
+
+                DirectoryEntry entry = _directory[index];
+                if (entry.Kind == DirectoryEntryKind.Stream)
+                {
+                    total = DocumentLoadBudgetState.AddWithoutOverflow(
+                        total, entry.Length > long.MaxValue ? long.MaxValue : (long)entry.Length);
+                }
+                else if (entry.Kind == DirectoryEntryKind.Storage)
+                {
+                    pending.Push(entry.Child);
+                }
+            }
+        }
+
+        return total;
     }
 
     /// <summary>Names of the streams and storages in the container, in directory order.</summary>
@@ -150,6 +220,21 @@ internal sealed class CompoundFile
         {
             if (entry.Kind == DirectoryEntryKind.Stream && string.Equals(entry.Name, name, StringComparison.Ordinal))
                 return Read(entry);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns a named stream's declared length without materializing its sector chain.
+    /// Format-specific readers use this for ceilings tighter than the general part budget.
+    /// </summary>
+    public long? TryGetStreamLength(string name)
+    {
+        foreach (DirectoryEntry entry in _directory)
+        {
+            if (entry.Kind == DirectoryEntryKind.Stream && string.Equals(entry.Name, name, StringComparison.Ordinal))
+                return entry.Length > long.MaxValue ? long.MaxValue : (long)entry.Length;
         }
 
         return null;
@@ -353,9 +438,29 @@ internal sealed class CompoundFile
     }
 
     private static List<DirectoryEntry> ReadDirectory(
-        byte[] data, int sectorSize, uint[] fat, uint firstSector, ushort majorVersion, long streamLimit)
+        byte[] data,
+        int sectorSize,
+        uint[] fat,
+        uint firstSector,
+        ushort majorVersion,
+        long streamLimit,
+        int maxEntries)
     {
-        byte[] bytes = ReadChain(data, sectorSize, fat, firstSector, length: -1, streamLimit, "directory");
+        long entryByteLimit = checked((long)maxEntries * DirectoryEntrySize);
+        long effectiveLimit = Math.Min(streamLimit, entryByteLimit);
+        byte[] bytes;
+        try
+        {
+            bytes = ReadChain(data, sectorSize, fat, firstSector, length: -1, effectiveLimit, "directory");
+        }
+        catch (DocumentLoadLimitException) when (entryByteLimit < streamLimit)
+        {
+            throw new DocumentLoadLimitException(
+                nameof(DocumentLoadBudget.MaxPackageParts), maxEntries, (long)maxEntries + 1);
+        }
+
+        DocumentLoadBudgetState.Ensure(
+            nameof(DocumentLoadBudget.MaxPackageParts), maxEntries, bytes.Length / DirectoryEntrySize);
         var entries = new List<DirectoryEntry>(bytes.Length / DirectoryEntrySize);
         for (int offset = 0; offset + DirectoryEntrySize <= bytes.Length; offset += DirectoryEntrySize)
         {
@@ -518,13 +623,16 @@ internal sealed class CompoundFile
     {
         long effectiveLimit = Math.Min(limit, int.MaxValue);
         if (length > (ulong)Math.Max(0, effectiveLimit))
-            throw TooLarge(description, length > long.MaxValue ? long.MaxValue : (long)length, effectiveLimit);
+        {
+            long observed = length > long.MaxValue ? long.MaxValue : (long)length;
+            throw new DocumentLoadLimitException(
+                nameof(DocumentLoadBudget.MaxPartBytes), effectiveLimit, observed);
+        }
         return (long)length;
     }
 
-    private static XlsFormatException TooLarge(string description, long size, long limit) => new(
-        $"The compound-file {description} declares at least {size} bytes, past the {limit}-byte limit. " +
-        "Raise XlsLoadOptions.Limits if the file is genuinely this large.");
+    private static DocumentLoadLimitException TooLarge(string _, long size, long limit) => new(
+        nameof(DocumentLoadBudget.MaxPartBytes), limit, size);
 
     private enum DirectoryEntryKind : byte
     {

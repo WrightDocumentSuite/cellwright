@@ -76,7 +76,10 @@ internal static class VbaDirectory
         IReadOnlyList<VbaModuleEntry> Modules);
 
     /// <summary>Reads the records of an unpacked <c>dir</c> stream.</summary>
-    public static Contents Parse(ReadOnlySpan<byte> dir, Encoding fallback)
+    public static Contents Parse(
+        ReadOnlySpan<byte> dir,
+        Encoding fallback,
+        CancellationToken cancellationToken = default)
     {
         Encoding text = fallback;
         int codePage = 0;
@@ -91,6 +94,7 @@ internal static class VbaDirectory
         int position = 0;
         while (position + 6 <= dir.Length)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             ushort id = BinaryPrimitives.ReadUInt16LittleEndian(dir[position..]);
             int size = (int)BinaryPrimitives.ReadUInt32LittleEndian(dir[(position + 2)..]);
 

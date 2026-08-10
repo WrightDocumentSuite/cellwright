@@ -20,7 +20,10 @@ internal static class BiffStrings
     /// Reads an <c>XLUnicodeString</c>: a two-byte character count, a flags byte, then the
     /// characters. Advances <paramref name="offset"/> past the whole thing.
     /// </summary>
-    public static string ReadUnicodeString(ReadOnlySpan<byte> body, ref int offset)
+    public static string ReadUnicodeString(
+        ReadOnlySpan<byte> body,
+        ref int offset,
+        DocumentLoadBudgetState? loadBudget = null)
     {
         if (offset + 3 > body.Length)
         {
@@ -30,7 +33,7 @@ internal static class BiffStrings
 
         int characters = BinaryPrimitives.ReadUInt16LittleEndian(body[offset..]);
         offset += 2;
-        return ReadCharacters(body, ref offset, characters);
+        return ReadCharacters(body, ref offset, characters, loadBudget);
     }
 
     /// <summary>
@@ -47,14 +50,18 @@ internal static class BiffStrings
 
         int characters = body[offset];
         offset += 1;
-        return ReadCharacters(body, ref offset, characters);
+        return ReadCharacters(body, ref offset, characters, loadBudget: null);
     }
 
     /// <summary>
     /// Reads the flags byte and the characters after a count has already been consumed. This is
     /// the body every unicode string in the format shares.
     /// </summary>
-    private static string ReadCharacters(ReadOnlySpan<byte> body, ref int offset, int characters)
+    private static string ReadCharacters(
+        ReadOnlySpan<byte> body,
+        ref int offset,
+        int characters,
+        DocumentLoadBudgetState? loadBudget)
     {
         if (offset >= body.Length)
             return "";
@@ -80,6 +87,7 @@ internal static class BiffStrings
 
         int byteCount = wide ? characters * 2 : characters;
         byteCount = Math.Min(byteCount, Math.Max(0, body.Length - offset));
+        loadBudget?.EnsureCellTextLength(wide ? byteCount / 2 : byteCount);
         string text = Decode(body.Slice(offset, byteCount), wide);
         offset += byteCount;
 
@@ -134,6 +142,7 @@ internal static class BiffStrings
     {
         private readonly ReadOnlySpan<byte> _body;
         private readonly IReadOnlyList<int> _pieces;
+        private readonly DocumentLoadBudgetState? _loadBudget;
         private int _offset;
         private int _piece;
         private int _pieceEnd;
@@ -142,10 +151,16 @@ internal static class BiffStrings
         /// <param name="body">The joined record body.</param>
         /// <param name="pieceSizes">Sizes of the pieces it arrived in, in order.</param>
         /// <param name="offset">Where to start reading, past the record's own header fields.</param>
-        public SstCursor(ReadOnlySpan<byte> body, IReadOnlyList<int> pieceSizes, int offset)
+        /// <param name="loadBudget">Shared counters used to reject oversized strings before decoding.</param>
+        public SstCursor(
+            ReadOnlySpan<byte> body,
+            IReadOnlyList<int> pieceSizes,
+            int offset,
+            DocumentLoadBudgetState? loadBudget = null)
         {
             _body = body;
             _pieces = pieceSizes;
+            _loadBudget = loadBudget;
             _offset = offset;
             _piece = 0;
             _pieceEnd = pieceSizes.Count > 0 ? pieceSizes[0] : body.Length;
@@ -191,6 +206,7 @@ internal static class BiffStrings
                 _offset += 4;
             }
 
+            _loadBudget?.EnsureCellTextLength(characters);
             string text = ReadSplitCharacters(characters, wide);
             Skip(runCount * 4);
             Skip(farEastSize);

@@ -15,7 +15,12 @@ namespace Cellwright.Xls.Reading;
 internal static class XlsWorkbookReader
 {
     /// <summary>Reads the bytes of a .xls file into a workbook.</summary>
-    public static Workbook Read(byte[] bytes, XlsLoadOptions options)
+    public static Workbook Read(
+        byte[] bytes,
+        XlsLoadOptions options,
+        DocumentLoadBudgetState? loadBudget = null,
+        CancellationToken cancellationToken = default,
+        CompoundFile? container = null)
     {
         Workbook workbook = Workbook.Create();
         var diagnostics = new LoadDiagnostics();
@@ -25,7 +30,9 @@ internal static class XlsWorkbookReader
             options.OnWarning?.Invoke(warning);
         }
 
-        byte[] stream = ExtractWorkbookStream(bytes, options.Limits, Warn, workbook.Properties);
+        loadBudget ??= new DocumentLoadBudgetState(options.EffectiveBudget);
+        byte[] stream = ExtractWorkbookStream(
+            bytes, options.EffectiveBudget, loadBudget, Warn, workbook.Properties, container);
         IRecordDecryptor? decryptor = FindDecryptor(stream, options, Warn);
 
         using var reader = new BiffReader(stream, decryptor);
@@ -35,12 +42,13 @@ internal static class XlsWorkbookReader
         // be global are mixed in with the cells.
         if (version <= BiffVersion.Biff4)
         {
-            LegacySheetReader.Read(workbook, reader, version, options, Warn);
+            LegacySheetReader.Read(workbook, reader, version, options, Warn, loadBudget, cancellationToken);
             workbook.AttachDiagnostics(diagnostics);
             return workbook;
         }
 
-        var globals = new GlobalsParser(reader, workbook.StylePool, Warn).Parse(version);
+        var globals = new GlobalsParser(
+            reader, workbook.StylePool, Warn, loadBudget, cancellationToken).Parse(version);
         workbook.SetDateSystem(globals.DateSystem);
 
         var sheetNames = new List<string>(globals.Sheets.Count);
@@ -48,7 +56,7 @@ internal static class XlsWorkbookReader
             sheetNames.Add(entry.Name);
 
         var decoder = new PtgDecoder(globals, sheetNames);
-        ReadSheets(workbook, reader, globals, decoder, Warn);
+        ReadSheets(workbook, reader, globals, decoder, Warn, loadBudget, cancellationToken);
         DefinedNameLoader.Apply(workbook, globals, decoder, Warn);
 
         workbook.AttachDiagnostics(diagnostics);
@@ -61,13 +69,19 @@ internal static class XlsWorkbookReader
     /// </summary>
     /// <param name="bytes">Bytes of the .xls file.</param>
     /// <param name="options">Reading settings.</param>
+    /// <param name="loadBudget">Shared resource counters for the import.</param>
+    /// <param name="cancellationToken">Cancels record parsing.</param>
     /// <exception cref="XlsFormatException">The file is not a workbook this library can stream.</exception>
     public static (byte[] Stream, IRecordDecryptor? Decryptor, XlsGlobals Globals) OpenForStreaming(
-        byte[] bytes, XlsLoadOptions options)
+        byte[] bytes,
+        XlsLoadOptions options,
+        DocumentLoadBudgetState? loadBudget = null,
+        CancellationToken cancellationToken = default)
     {
         void Warn(WorkbookWarning warning) => options.OnWarning?.Invoke(warning);
 
-        byte[] stream = ExtractWorkbookStream(bytes, options.Limits, Warn);
+        loadBudget ??= new DocumentLoadBudgetState(options.EffectiveBudget);
+        byte[] stream = ExtractWorkbookStream(bytes, options.EffectiveBudget, loadBudget, Warn);
         IRecordDecryptor? decryptor = FindDecryptor(stream, options, Warn);
 
         using var reader = new BiffReader(stream, decryptor);
@@ -84,18 +98,26 @@ internal static class XlsWorkbookReader
 
         // The pool is thrown away: streaming hands back values, and the styles only matter
         // here for telling a date from the number it is stored as.
-        var globals = new GlobalsParser(reader, new StylePool(), Warn).Parse(version);
+        var globals = new GlobalsParser(
+            reader, new StylePool(), Warn, loadBudget, cancellationToken).Parse(version);
         return (stream, decryptor, globals);
     }
 
     private static void ReadSheets(
-        Workbook workbook, BiffReader reader, XlsGlobals globals, PtgDecoder decoder, Action<WorkbookWarning> warn)
+        Workbook workbook,
+        BiffReader reader,
+        XlsGlobals globals,
+        PtgDecoder decoder,
+        Action<WorkbookWarning> warn,
+        DocumentLoadBudgetState loadBudget,
+        CancellationToken cancellationToken)
     {
         int globalsEnd = reader.Position;
         List<int>? substreamStarts = null;
 
         for (int index = 0; index < globals.Sheets.Count; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             XlsSheetEntry entry = globals.Sheets[index];
             if (entry.Kind != XlsSheetKind.Worksheet)
             {
@@ -115,7 +137,7 @@ internal static class XlsWorkbookReader
                 // Files exist whose sheet offsets are stale by a few bytes, usually because
                 // something rewrote the globals without fixing them up. The substream is still
                 // there; the nearest one is what the entry meant.
-                substreamStarts ??= FindSubstreamStarts(reader, globalsEnd);
+                substreamStarts ??= FindSubstreamStarts(reader, globalsEnd, cancellationToken);
                 if (NearestStart(substreamStarts, offset) is not { } repaired)
                 {
                     warn(new WorkbookWarning(
@@ -134,8 +156,17 @@ internal static class XlsWorkbookReader
             reader.Seek(offset);
             reader.Read();
 
-            var sink = new WorksheetContentSink(sheet, styleMap: [], relationships: [], preserveMarkup: false, warn);
-            new SheetParser(reader, globals, decoder, index, NextSubstreamStart(reader, globals, offset), warn)
+            var sink = new WorksheetContentSink(
+                sheet, styleMap: [], relationships: [], preserveMarkup: false, warn, loadBudget);
+            new SheetParser(
+                    reader,
+                    globals,
+                    decoder,
+                    index,
+                    NextSubstreamStart(reader, globals, offset),
+                    warn,
+                    loadBudget,
+                    cancellationToken)
                 .Parse(sink);
         }
     }
@@ -164,7 +195,8 @@ internal static class XlsWorkbookReader
     /// Finds where each top-level substream begins. Nesting is tracked because an embedded
     /// chart opens a substream of its own inside the sheet that holds it.
     /// </summary>
-    private static List<int> FindSubstreamStarts(BiffReader reader, int globalsEnd)
+    private static List<int> FindSubstreamStarts(
+        BiffReader reader, int globalsEnd, CancellationToken cancellationToken)
     {
         int resume = reader.Position;
         var starts = new List<int>();
@@ -173,6 +205,7 @@ internal static class XlsWorkbookReader
         reader.Seek(globalsEnd);
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             switch (reader.RecordType)
             {
                 case BiffRecordType.Bof:
@@ -218,19 +251,30 @@ internal static class XlsWorkbookReader
     /// here, where the container is open, rather than by the record reader.
     /// </summary>
     private static byte[] ExtractWorkbookStream(
-        byte[] bytes, PackageLimits limits, Action<WorkbookWarning> warn, WorkbookProperties? properties = null)
+        byte[] bytes,
+        DocumentLoadBudget budget,
+        DocumentLoadBudgetState loadBudget,
+        Action<WorkbookWarning> warn,
+        WorkbookProperties? properties = null,
+        CompoundFile? container = null)
     {
         if (!CompoundFile.HasSignature(bytes))
         {
             // Before Excel 5 a workbook was the record stream on its own, with no container.
             if (bytes.Length >= 4 && LooksLikeBof(bytes))
+            {
+                DocumentLoadBudgetState.Ensure(
+                    nameof(DocumentLoadBudget.MaxPartBytes), budget.MaxPartBytes, bytes.LongLength);
+                loadBudget.AddPackageParts(1);
+                loadBudget.AddInflatedBytes(bytes.LongLength);
                 return bytes;
+            }
 
             throw new XlsFormatException(
                 "The file is neither a compound file nor a bare BIFF stream, so it is not a legacy Excel workbook.");
         }
 
-        CompoundFile container = CompoundFile.Parse(bytes, limits);
+        container ??= CompoundFile.Parse(bytes, budget, loadBudget);
         if (Crypto.OoxmlEncryption.IsEncryptedPackage(container))
         {
             throw new XlsFormatException(

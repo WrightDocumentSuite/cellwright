@@ -52,11 +52,13 @@ internal sealed class ConditionalFormatEvaluator
 {
     private readonly Worksheet _sheet;
     private readonly Func<string, CellRef, CellValue>? _evaluate;
+    private readonly Func<string, CellRef, CellRef, CellValue>? _evaluateRelative;
     private readonly DateOnly _today;
     private readonly List<ConditionalFormatRule> _rules = [];
     private readonly Dictionary<ConditionalFormatRule, ConditionalRangeStatistics> _statistics = [];
     private readonly Dictionary<(CellStyle Stated, DifferentialStyle Format), CellStyle> _overlaid = [];
     private readonly Dictionary<(ConditionalFormatRule Rule, int Index), CellValue?> _operands = [];
+    private readonly Dictionary<(ConditionalFormatRule Rule, string Formula), double?> _stopParameters = [];
     private readonly HashSet<string> _unsupported = [];
 
     /// <summary>Prepares the rules of a sheet for evaluation.</summary>
@@ -65,15 +67,29 @@ internal sealed class ConditionalFormatEvaluator
     /// How to evaluate a rule's formula in a cell, or <see langword="null"/> when the caller has
     /// no formula engine. Reference <c>Cellwright.Formulas</c> and pass
     /// <c>(formula, cell) =&gt; sheet.Evaluate(formula, cell.ToString())</c>.
+    /// Relative references have already been copied from the first range's top-left cell to the
+    /// target cell before this delegate is called.
     /// </param>
     /// <param name="today">What counts as today for the rules about time periods.</param>
+    /// <param name="evaluateRelative">
+    /// Cache-stable counterpart of <paramref name="evaluate"/>: it receives the formula as stored,
+    /// its anchor, and its target. A formula engine can compile the stored text once and apply the
+    /// copy offset during evaluation instead of caching one translated string per cell.
+    /// </param>
     public ConditionalFormatEvaluator(
-        Worksheet sheet, Func<string, CellRef, CellValue>? evaluate = null, DateOnly? today = null)
+        Worksheet sheet,
+        Func<string, CellRef, CellValue>? evaluate = null,
+        DateOnly? today = null,
+        Func<string, CellRef, CellRef, CellValue>? evaluateRelative = null)
     {
         ArgumentNullException.ThrowIfNull(sheet);
         _sheet = sheet;
         _evaluate = evaluate;
+        _evaluateRelative = evaluateRelative;
         _today = today ?? DateOnly.FromDateTime(DateTime.Today);
+
+        if (sheet.Markup?.HasUnsupportedExtensionConditionalFormats is true)
+            _unsupported.Add("conditional-format-opaque");
 
         foreach (ConditionalFormatRule rule in sheet.ConditionalFormats)
         {
@@ -85,7 +101,31 @@ internal sealed class ConditionalFormatEvaluator
                 _rules.Add(rule);
         }
 
-        _rules.Sort(static (left, right) => left.Priority.CompareTo(right.Priority));
+        // Supported x14 rules are a read-only semantic projection over the preserved extLst.
+        // They never enter the public collection, otherwise a later base-rule edit would write
+        // them in the base namespace and then replay the original extension a second time.
+        if (sheet.Markup?.ExtensionConditionalFormats is { } extension)
+        {
+            foreach (ConditionalFormatRule rule in extension.Rules)
+                _rules.Add(rule);
+        }
+
+        StableSortByPriority(_rules);
+    }
+
+    /// <summary>
+    /// Orders rules without disturbing their collection order when a malformed or manually built
+    /// model gives two of them the same priority. Binary formats require unique priorities, but a
+    /// deterministic fallback is safer than letting <c>List.Sort</c> choose a winner.
+    /// </summary>
+    private static void StableSortByPriority(List<ConditionalFormatRule> rules)
+    {
+        // Enumerable.OrderBy is stable and keeps the adversarial reverse-priority case at
+        // O(n log n). A quadratic insertion pass is visible on imported sheets with thousands
+        // of rules and would turn PDF composition into an avoidable denial-of-service surface.
+        ConditionalFormatRule[] ordered = [.. rules.OrderBy(static rule => rule.Priority)];
+        rules.Clear();
+        rules.AddRange(ordered);
     }
 
     /// <summary>Whether the sheet has any rule this can apply.</summary>
@@ -116,31 +156,66 @@ internal sealed class ConditionalFormatEvaluator
             if (!Covers(rule, cell))
                 continue;
 
+            bool stop = false;
             switch (rule.Type)
             {
                 case ConditionalFormatType.ColorScale when rule.ColorScale is { } colorScale:
-                    if (Grade(rule, colorScale, value) is { IsAuto: false } graded)
-                        scale = graded;
-                    continue;
+                {
+                    if (rule.Formulas.Count > 0 && !IsFormulaTrue(rule, cell, 0))
+                        break;
+
+                    ExcelColor graded = Grade(rule, colorScale, value);
+                    if (!graded.IsAuto)
+                    {
+                        // Rules arrive highest-priority first. A scale owns the fill channel, but
+                        // only if an earlier differential format has not already claimed it.
+                        if (scale.IsAuto && (style is null || style.FillColor.IsAuto))
+                            scale = graded;
+                        stop = rule.StopIfTrue;
+                    }
+                    break;
+                }
 
                 case ConditionalFormatType.DataBar when rule.DataBar is { } dataBar:
-                    bar ??= Measure(rule, dataBar, value);
-                    continue;
+                {
+                    if (rule.Formulas.Count > 0 && !IsFormulaTrue(rule, cell, 0))
+                        break;
+
+                    ConditionalBar? measured = Measure(rule, dataBar, value);
+                    if (measured is not null)
+                    {
+                        bar ??= measured;
+                        stop = rule.StopIfTrue;
+                    }
+                    break;
+                }
 
                 case ConditionalFormatType.IconSet when rule.IconSet is { } iconSet:
-                    icon ??= Choose(rule, iconSet, value);
-                    continue;
+                {
+                    if (rule.Formulas.Count > 0 && !IsFormulaTrue(rule, cell, 0))
+                        break;
+
+                    ConditionalIcon? chosen = Choose(rule, iconSet, value);
+                    if (chosen is not null)
+                    {
+                        icon ??= chosen;
+                        stop = rule.StopIfTrue;
+                    }
+                    break;
+                }
+
+                default:
+                    if (!Matches(rule, cell, value))
+                        continue;
+
+                    // Lower-priority rules fill only properties the earlier rules did not name.
+                    if (rule.Style is { IsEmpty: false } matched)
+                        style = style is null ? matched : Merge(style, matched);
+                    stop = rule.StopIfTrue;
+                    break;
             }
 
-            if (!Matches(rule, cell, value))
-                continue;
-
-            // Later rules paint over earlier ones only where they say something; a rule that
-            // sets nothing but the fill leaves the font an earlier rule chose.
-            if (rule.Style is { IsEmpty: false } matched)
-                style = style is null ? matched : Merge(style, matched);
-
-            if (rule.StopIfTrue)
+            if (stop)
                 break;
         }
 
@@ -295,13 +370,13 @@ internal sealed class ConditionalFormatEvaluator
             return true;
         }
 
-        if (_evaluate is null)
+        if (!CanEvaluateFormula)
         {
             _unsupported.Add("conditional-format-formula");
             return false;
         }
 
-        operand = _evaluate(rule.Formulas[index], cell);
+        operand = EvaluateFormula(rule, cell, index);
         return true;
     }
 
@@ -334,13 +409,13 @@ internal sealed class ConditionalFormatEvaluator
         if (index >= rule.Formulas.Count)
             return false;
 
-        if (_evaluate is null)
+        if (!CanEvaluateFormula)
         {
             _unsupported.Add("conditional-format-formula");
             return false;
         }
 
-        CellValue result = _evaluate(rule.Formulas[index], cell);
+        CellValue result = EvaluateFormula(rule, cell, index);
         return result.Kind switch
         {
             CellValueKind.Boolean => result.GetBoolean(),
@@ -348,6 +423,23 @@ internal sealed class ConditionalFormatEvaluator
             _ => false,
         };
     }
+
+    /// <summary>
+    /// Evaluates a rule formula as copied from the first range's top-left cell to the cell being
+    /// judged. The callback still receives the target as its origin so functions such as ROW()
+    /// and COLUMN() see the right cell.
+    /// </summary>
+    private CellValue EvaluateFormula(ConditionalFormatRule rule, CellRef cell, int index)
+    {
+        CellRef anchor = rule.Ranges.Count == 0 ? cell : rule.Ranges[0].Start;
+        if (_evaluateRelative is { } evaluateRelative)
+            return evaluateRelative(rule.Formulas[index], anchor, cell);
+
+        string translated = FormulaText.Translate(rule.Formulas[index], anchor, cell)!;
+        return _evaluate!(translated, cell);
+    }
+
+    private bool CanEvaluateFormula => _evaluate is not null || _evaluateRelative is not null;
 
     private bool Ranks(ConditionalFormatRule rule, in CellValue value)
     {
@@ -488,8 +580,13 @@ internal sealed class ConditionalFormatEvaluator
         double low = Position(bar.Minimum, statistics, rule);
         double high = Position(bar.Maximum, statistics, rule);
 
-        double fraction = high <= low ? 1 : (number - low) / (high - low);
-        return new ConditionalBar(Math.Clamp(fraction, 0, 1), bar.Color, bar.ShowValue);
+        double position = Math.Clamp(high <= low ? 1 : (number - low) / (high - low), 0, 1);
+        double minimumLength = Math.Clamp(bar.MinimumLength, 0, 100) / 100.0;
+        double maximumLength = Math.Max(
+            minimumLength,
+            Math.Clamp(bar.MaximumLength, 0, 100) / 100.0);
+        double fraction = minimumLength + (position * (maximumLength - minimumLength));
+        return new ConditionalBar(fraction, bar.Color, bar.ShowValue);
     }
 
     private ConditionalIcon? Choose(ConditionalFormatRule rule, IconSet icons, in CellValue value)
@@ -507,7 +604,9 @@ internal sealed class ConditionalFormatEvaluator
         int band = 0;
         for (int i = 1; i < icons.Values.Count; i++)
         {
-            if (number >= Position(icons.Values[i], statistics, rule))
+            ConditionalValue threshold = icons.Values[i];
+            double boundary = Position(threshold, statistics, rule);
+            if (threshold.GreaterThanOrEqual ? number >= boundary : number > boundary)
                 band = i;
         }
 
@@ -527,29 +626,18 @@ internal sealed class ConditionalFormatEvaluator
 
             case ConditionalValueType.Percent:
             {
-                double percent = Number(stop.Value);
+                double percent = StopParameter(stop.Value, rule, fallback: 0);
                 return statistics.Minimum + ((statistics.Maximum - statistics.Minimum) * percent / 100);
             }
 
             case ConditionalValueType.Percentile:
-                return statistics.Percentile(Number(stop.Value));
+                return statistics.Percentile(StopParameter(stop.Value, rule, fallback: 0));
 
             case ConditionalValueType.Number:
-                return Number(stop.Value);
+                return StopParameter(stop.Value, rule, fallback: 0);
 
             case ConditionalValueType.Formula:
-            {
-                if (_evaluate is null)
-                {
-                    _unsupported.Add("conditional-format-formula");
-                    return statistics.Minimum;
-                }
-
-                CellValue result = _evaluate(stop.Value ?? "0", rule.Ranges[0].Start);
-                return ConditionalRangeStatistics.TryNumber(result, DateSystemOf(), out double number)
-                    ? number
-                    : statistics.Minimum;
-            }
+                return StopParameter(stop.Value, rule, statistics.Minimum);
 
             default:
                 return statistics.Minimum;
@@ -570,11 +658,55 @@ internal sealed class ConditionalFormatEvaluator
 
     private ExcelDateSystem DateSystemOf() => _sheet.Workbook.DateSystem;
 
-    private static double Number(string? text) =>
-        double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ? value : 0;
+    /// <summary>
+    /// The X parameter of a graded stop. BIFF and SpreadsheetML both allow the parameter of a
+    /// number, percent, or percentile stop to come from a formula without changing the stop type.
+    /// </summary>
+    private double StopParameter(string? text, ConditionalFormatRule rule, double fallback)
+    {
+        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
+            return value;
+        if (string.IsNullOrWhiteSpace(text))
+            return fallback;
 
-    private static bool IsBlank(in CellValue value) =>
-        value.IsBlank || (value.Kind == CellValueKind.Text && value.GetText().Length == 0);
+        if (!CanEvaluateFormula)
+        {
+            _unsupported.Add("conditional-format-formula");
+            return fallback;
+        }
+
+        string formula = text;
+        if (_stopParameters.TryGetValue((rule, formula), out double? cached))
+            return cached ?? fallback;
+
+        CellRef anchor = rule.Ranges.Count == 0 ? new CellRef(1, 1) : rule.Ranges[0].Start;
+        CellValue result = _evaluateRelative is { } evaluateRelative
+            ? evaluateRelative(formula, anchor, anchor)
+            : _evaluate!(formula, anchor);
+        double? parameter = ConditionalRangeStatistics.TryNumber(result, DateSystemOf(), out double number)
+            ? number
+            : null;
+        _stopParameters[(rule, formula)] = parameter;
+        return parameter ?? fallback;
+    }
+
+    private static bool IsBlank(in CellValue value)
+    {
+        if (value.IsBlank)
+            return true;
+        if (value.Kind != CellValueKind.Text)
+            return false;
+
+        // The format defines this as LEN(TRIM(cell))=0. Excel's TRIM removes U+0020, not every
+        // Unicode whitespace character, so tabs and non-breaking spaces remain nonblank.
+        foreach (char character in value.GetText())
+        {
+            if (character != ' ')
+                return false;
+        }
+
+        return true;
+    }
 
     private static string Text(in CellValue value) =>
         value.Kind == CellValueKind.Text ? value.GetText() : value.ToString();
@@ -605,29 +737,60 @@ internal sealed class ConditionalFormatEvaluator
         return int.MinValue;
     }
 
-    /// <summary>Merges a later format over an earlier one, property by property.</summary>
-    private static DifferentialStyle Merge(DifferentialStyle? earlier, DifferentialStyle later)
+    /// <summary>
+    /// Adds a lower-priority format without replacing properties a higher-priority one named.
+    /// </summary>
+    private static DifferentialStyle Merge(DifferentialStyle? higher, DifferentialStyle lower)
     {
-        if (earlier is null)
-            return later;
+        if (higher is null)
+            return lower;
 
         return new DifferentialStyle
         {
-            Bold = later.Bold ?? earlier.Bold,
-            Italic = later.Italic ?? earlier.Italic,
-            Underline = later.Underline ?? earlier.Underline,
-            Strikethrough = later.Strikethrough ?? earlier.Strikethrough,
-            FontColor = later.FontColor.IsAuto ? earlier.FontColor : later.FontColor,
-            FillColor = later.FillColor.IsAuto ? earlier.FillColor : later.FillColor,
-            NumberFormat = later.NumberFormat ?? earlier.NumberFormat,
-            Border = later.Border ?? earlier.Border,
+            Bold = higher.Bold ?? lower.Bold,
+            Italic = higher.Italic ?? lower.Italic,
+            Underline = higher.Underline ?? lower.Underline,
+            Strikethrough = higher.Strikethrough ?? lower.Strikethrough,
+            FontColor = higher.FontColor.IsAuto ? lower.FontColor : higher.FontColor,
+            FillColor = higher.FillColor.IsAuto ? lower.FillColor : higher.FillColor,
+            NumberFormat = higher.NumberFormat ?? lower.NumberFormat,
+            Border = MergeBorders(higher.Border, lower.Border),
         };
     }
 
-    /// <summary>Mixes two colours, channel by channel.</summary>
-    private static ExcelColor Blend(ExcelColor from, ExcelColor to, double fraction)
+    private static BorderStyle? MergeBorders(BorderStyle? higher, BorderStyle? lower)
     {
-        if (from.IsThemed || to.IsThemed || from.IsAuto || to.IsAuto)
+        if (higher is null)
+            return lower;
+        if (lower is null)
+            return higher;
+
+        // BorderStyle predates differential formatting and has no per-edge presence bits. In a
+        // dxf, however, edges are independent, so the useful convention is that Line=None means
+        // "not supplied" while combining rules. It cannot express an explicit edge clear; that
+        // remains a documented model limitation.
+        bool higherDiagonal = higher.Diagonal.Line != BorderLineStyle.None;
+        return new BorderStyle
+        {
+            Left = Pick(higher.Left, lower.Left),
+            Right = Pick(higher.Right, lower.Right),
+            Top = Pick(higher.Top, lower.Top),
+            Bottom = Pick(higher.Bottom, lower.Bottom),
+            Diagonal = Pick(higher.Diagonal, lower.Diagonal),
+            DiagonalUp = higherDiagonal ? higher.DiagonalUp : lower.DiagonalUp,
+            DiagonalDown = higherDiagonal ? higher.DiagonalDown : lower.DiagonalDown,
+        };
+
+        static BorderEdge Pick(BorderEdge first, BorderEdge second) =>
+            first.Line == BorderLineStyle.None ? second : first;
+    }
+
+    /// <summary>Mixes two colours, channel by channel.</summary>
+    private ExcelColor Blend(ExcelColor from, ExcelColor to, double fraction)
+    {
+        from = _sheet.Workbook.Theme.Resolve(from);
+        to = _sheet.Workbook.Theme.Resolve(to);
+        if (from.IsAuto || to.IsAuto)
             return fraction < 0.5 ? from : to;
 
         double amount = Math.Clamp(fraction, 0, 1);

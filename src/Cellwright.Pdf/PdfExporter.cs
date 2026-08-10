@@ -37,6 +37,7 @@ public static class PdfExporter
             var context = new PdfExportContext(workbook, pdf, options);
             var composer = new WorkbookComposer(context);
             IReadOnlyList<ComposedPage> pages = composer.Compose();
+            context.CommentLosses.Report(context.Diagnostics);
 
             DocumentTagger? tagger = options.Tagged ? new DocumentTagger(context) : null;
             new PageRenderer(context).Render(pages, tagger);

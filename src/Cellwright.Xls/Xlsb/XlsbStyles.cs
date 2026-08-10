@@ -11,16 +11,20 @@ namespace Cellwright.Xls.Xlsb;
 /// The tables here are the same four the older format has — number formats, fonts, fills,
 /// borders — but colours are written outright as ARGB instead of as slots in a palette of 56,
 /// which is the one thing that makes this simpler rather than harder than its predecessor.
+/// Differential formats are a fifth, property-sized table returned for conditional rules to
+/// attach after their sheet has been parsed.
 /// </remarks>
 internal static class XlsbStyles
 {
-    public static void Read(byte[] part, XlsGlobals globals, StylePool pool)
+    /// <returns>Differential formats in <c>dxfId</c> order.</returns>
+    public static IReadOnlyList<DifferentialStyle> Read(byte[] part, XlsGlobals globals, StylePool pool)
     {
         var formats = new Dictionary<int, string>();
         var fonts = new List<FontStyle>();
         var fills = new List<FillStyle>();
         var borders = new List<BorderStyle>();
         var cellFormats = new List<XlsbXf>();
+        var differentialStyles = new List<DifferentialStyle>();
 
         var reader = new Biff12Reader(part);
         while (reader.Read())
@@ -48,6 +52,12 @@ internal static class XlsbStyles
                 case Biff12RecordType.Xf:
                     cellFormats.Add(ReadXf(reader.Record));
                     break;
+                case Biff12RecordType.Dxf:
+                    // A malformed entry still occupies its position in the table: dxfId is an
+                    // index, so dropping one would silently attach every later style to the
+                    // wrong conditional-formatting rule.
+                    differentialStyles.Add(ReadDifferentialStyle(reader.Record, formats));
+                    break;
 
                 default:
                     break;
@@ -61,12 +71,14 @@ internal static class XlsbStyles
             globals.TemporalKinds.Add(
                 NumberFormatClassifier.Classify(xf.Format, code.Length == 0 ? null : code));
         }
+
+        return differentialStyles;
     }
 
     /// <summary>One entry of the cell format table, before the tables it points into are joined.</summary>
     private readonly record struct XlsbXf(int Format, int Font, int Fill, int Border, bool Locked, bool Hidden);
 
-    private static string Resolve(Dictionary<int, string> formats, int index) =>
+    private static string Resolve(IReadOnlyDictionary<int, string> formats, int index) =>
         formats.TryGetValue(index, out string? custom) ? custom : BuiltinNumberFormats.GetCode(index) ?? "";
 
     private static void ReadFormat(ReadOnlySpan<byte> body, Dictionary<int, string> formats)
@@ -181,6 +193,149 @@ internal static class XlsbStyles
         };
 
     /// <summary>
+    /// Reads a <c>BrtDXF</c> (MS-XLSB 2.4.359). Its <c>XFProps</c> array is deliberately
+    /// property-sized: unsupported additions can be skipped by <c>cb</c> without losing the
+    /// boundary of the next property.
+    /// </summary>
+    private static DifferentialStyle ReadDifferentialStyle(
+        ReadOnlySpan<byte> body, IReadOnlyDictionary<int, string> formats)
+    {
+        // Two bytes of BrtDXF flags, then XFProps.reserved and XFProps.cprops.
+        if (body.Length < 6)
+            return DifferentialStyle.Empty;
+
+        var style = DifferentialStyle.Empty;
+        ExcelColor foreground = ExcelColor.Auto;
+        ExcelColor background = ExcelColor.Auto;
+        BorderStyle? border = null;
+        string? directNumberFormat = null;
+        int? numberFormatId = null;
+        int propertyCount = BinaryPrimitives.ReadUInt16LittleEndian(body[4..]);
+        int offset = 6;
+
+        for (int index = 0; index < propertyCount; index++)
+        {
+            if (offset + 4 > body.Length)
+                break;
+
+            int type = BinaryPrimitives.ReadUInt16LittleEndian(body[offset..]);
+            int size = BinaryPrimitives.ReadUInt16LittleEndian(body[(offset + 2)..]);
+            if (size < 4 || size > body.Length - offset)
+                break;
+
+            ReadOnlySpan<byte> data = body.Slice(offset + 4, size - 4);
+            offset += size;
+
+            switch (type)
+            {
+                case 0x0001: // foreground fill color
+                    foreground = ReadPropertyColor(data);
+                    break;
+                case 0x0002: // background fill color
+                    background = ReadPropertyColor(data);
+                    break;
+                case 0x0005: // text color
+                    style = style with { FontColor = ReadPropertyColor(data) };
+                    break;
+                case 0x0006: // top border
+                    border = (border ?? BorderStyle.None) with { Top = ReadPropertyBorder(data) };
+                    break;
+                case 0x0007: // bottom border
+                    border = (border ?? BorderStyle.None) with { Bottom = ReadPropertyBorder(data) };
+                    break;
+                case 0x0008: // left border
+                    border = (border ?? BorderStyle.None) with { Left = ReadPropertyBorder(data) };
+                    break;
+                case 0x0009: // right border
+                    border = (border ?? BorderStyle.None) with { Right = ReadPropertyBorder(data) };
+                    break;
+                case 0x000A: // diagonal border
+                    border = (border ?? BorderStyle.None) with { Diagonal = ReadPropertyBorder(data) };
+                    break;
+                case 0x000D when data.Length >= 1:
+                    border = (border ?? BorderStyle.None) with { DiagonalUp = data[0] != 0 };
+                    break;
+                case 0x000E when data.Length >= 1:
+                    border = (border ?? BorderStyle.None) with { DiagonalDown = data[0] != 0 };
+                    break;
+                case 0x0019 when data.Length >= 2: // Bold
+                    style = style with { Bold = BinaryPrimitives.ReadUInt16LittleEndian(data) >= 0x02BC };
+                    break;
+                case 0x001A when data.Length >= 2: // Underline; the model has a single toggle.
+                    style = style with { Underline = BinaryPrimitives.ReadUInt16LittleEndian(data) != 0 };
+                    break;
+                case 0x001C when data.Length >= 1:
+                    style = style with { Italic = data[0] != 0 };
+                    break;
+                case 0x001D when data.Length >= 1:
+                    style = style with { Strikethrough = data[0] != 0 };
+                    break;
+                case 0x0026 when TryReadNumberFormat(data, out string? code):
+                    directNumberFormat = code;
+                    break;
+                case 0x0029 when data.Length >= 2:
+                    numberFormatId = BinaryPrimitives.ReadUInt16LittleEndian(data);
+                    break;
+                default:
+                    // Alignment, gradients, font name/size and future properties are not in
+                    // DifferentialStyle. The size field has already advanced over their blob.
+                    break;
+            }
+        }
+
+        // Like the OOXML dxf reader, prefer the background spelling. Excel's own common
+        // conditional-format preset writes only property 0x0002 and no FillPattern property.
+        ExcelColor paint = !background.IsAuto ? background : foreground;
+        if (!paint.IsAuto)
+            style = style with { FillColor = paint };
+        if (border is not null)
+            style = style with { Border = border };
+        if (directNumberFormat is not null)
+            style = style with { NumberFormat = directNumberFormat };
+        else if (numberFormatId is int formatId)
+            style = style with { NumberFormat = Resolve(formats, formatId) };
+        return style;
+    }
+
+    /// <summary>An XFPropColor packs its validity bit before the seven-bit color kind.</summary>
+    private static ExcelColor ReadPropertyColor(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < 8)
+            return ExcelColor.Auto;
+
+        int type = body[0] >> 1;
+        int index = body[1];
+        short rawTint = BinaryPrimitives.ReadInt16LittleEndian(body[2..]);
+        double tint = rawTint == short.MinValue ? 0 : rawTint / 32767.0;
+        return type switch
+        {
+            1 => ExcelColor.FromIndexed(index),
+            2 => ExcelColor.FromArgb((uint)((body[7] << 24) | (body[4] << 16) | (body[5] << 8) | body[6])),
+            3 => ExcelColor.FromTheme(SwapDarkAndLight(index), tint),
+            _ => ExcelColor.Auto,
+        };
+    }
+
+    private static BorderEdge ReadPropertyBorder(ReadOnlySpan<byte> body) => body.Length < 10
+        ? default
+        : new BorderEdge(MapLine(BinaryPrimitives.ReadUInt16LittleEndian(body[8..])), ReadPropertyColor(body));
+
+    /// <summary>The direct format-string property is an LPWideString.</summary>
+    private static bool TryReadNumberFormat(ReadOnlySpan<byte> body, out string? code)
+    {
+        code = null;
+        if (body.Length < 2)
+            return false;
+
+        int characters = BinaryPrimitives.ReadUInt16LittleEndian(body);
+        if (characters <= 0 || characters * 2 != body.Length - 2)
+            return false;
+
+        code = System.Text.Encoding.Unicode.GetString(body[2..]);
+        return true;
+    }
+
+    /// <summary>
     /// Reads a <c>BrtColor</c> (MS-XLSB 2.4.337): a type, an index, a tint, and four channels.
     /// Which of them mean anything depends on the type, and only one of the four kinds carries
     /// its colour in the channels. Shared with the conditional formatting reader, whose graded
@@ -191,17 +346,24 @@ internal static class XlsbStyles
         if (body.Length < 8)
             return ExcelColor.Auto;
 
-        int type = body[0] & 0x7F;
+        int packedType = body[0];
+        bool validRgb = (packedType & 0x01) != 0;
+        int type = packedType >> 1;
         int index = body[1];
 
         // The tint is a fraction of the full range, which the format spends a signed short on:
         // its extremes are complete lightening and complete darkening.
-        double tint = BinaryPrimitives.ReadInt16LittleEndian(body[2..]) / 32767.0;
+        short rawTint = BinaryPrimitives.ReadInt16LittleEndian(body[2..]);
+        double tint = rawTint < 0 ? rawTint / 32768.0 : rawTint / 32767.0;
 
         return type switch
         {
             1 => ExcelColor.FromIndexed(index),
-            2 => ExcelColor.FromArgb((uint)((body[7] << 24) | (body[4] << 16) | (body[5] << 8) | body[6])),
+            // fValidRGB is the low bit preceding xColorType, and MUST be one for an
+            // explicit RGB color. Treat a producer that violates that invariant as not
+            // having supplied a usable color instead of consuming undefined channels.
+            2 when validRgb => ExcelColor.FromArgb(
+                (uint)((body[7] << 24) | (body[4] << 16) | (body[5] << 8) | body[6])),
 
             // The theme numbers its slots as the scheme states them, dark before light; a style
             // names the same slots with the first two pairs swapped, which is what the model
@@ -245,7 +407,7 @@ internal static class XlsbStyles
         _ => FillPattern.None,
     };
 
-    private static BorderLineStyle MapLine(byte style) => style switch
+    private static BorderLineStyle MapLine(ushort style) => style switch
     {
         1 => BorderLineStyle.Thin,
         2 => BorderLineStyle.Medium,

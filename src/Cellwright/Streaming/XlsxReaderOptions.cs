@@ -7,14 +7,34 @@ public sealed record XlsxReaderOptions
 {
     internal static readonly XlsxReaderOptions Default = new();
 
+    private DocumentLoadBudget _budget = DocumentLoadBudget.Default;
+    private PackageLimits? _legacyLimits;
+
     /// <summary>Keep the source stream open after the reader is disposed. Ignored for file paths.</summary>
     public bool LeaveOpen { get; init; }
 
+    /// <summary>Shared ceilings for source bytes, package expansion, XML, cells and resources.</summary>
+    public DocumentLoadBudget Budget
+    {
+        get => EffectiveBudget;
+        init
+        {
+            _budget = value ?? throw new ArgumentNullException(nameof(value));
+            _legacyLimits = null;
+        }
+    }
+
     /// <summary>
-    /// What the package is allowed to cost in memory. The defaults sit far above any real
-    /// workbook; <see cref="PackageLimits.None"/> removes them for a file you trust.
+    /// Compatibility view of the former package-only limits. Setting it updates input,
+    /// per-part and total-inflated ceilings in <see cref="Budget"/>.
     /// </summary>
-    public PackageLimits Limits { get; init; } = PackageLimits.Default;
+    public PackageLimits Limits
+    {
+        get => _legacyLimits ?? PackageLimits.From(_budget);
+        init => _legacyLimits = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    internal DocumentLoadBudget EffectiveBudget => _legacyLimits?.ApplyTo(_budget) ?? _budget;
 
     /// <summary>
     /// Invoked for recoverable oddities found while reading (unknown cell types, malformed values,

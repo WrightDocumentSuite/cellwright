@@ -1,5 +1,7 @@
+using Cellwright.Pdf.Fonts;
 using Cellwright.Styles;
 using Inkwright;
+using Inkwright.Fonts;
 using Xunit;
 
 namespace Cellwright.Pdf.Tests;
@@ -254,5 +256,39 @@ public sealed class ExportBasicsTests
 
         Assert.Contains("Text", rendered.Text(0), StringComparison.Ordinal);
         Assert.Contains(rendered.Diagnostics.SubstitutedFonts, family => family == "No Such Face At All");
+    }
+
+    [Fact]
+    public void InstalledTimesNewRomanFacesKeepTheirExcelMetricsWithoutSubstitution()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "This regression covers Windows font file names.");
+        string fonts = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Fonts");
+        Assert.SkipWhen(!File.Exists(Path.Combine(fonts, "times.ttf")) ||
+                        !File.Exists(Path.Combine(fonts, "timesbd.ttf")) ||
+                        !File.Exists(Path.Combine(fonts, "timesi.ttf")) ||
+                        !File.Exists(Path.Combine(fonts, "timesbi.ttf")),
+            "All four Times New Roman faces are required.");
+
+        (string Text, bool Bold, bool Italic)[] faces =
+        [
+            ("Regular", false, false),
+            ("Bold", true, false),
+            ("Italic", false, true),
+            ("Bold italic", true, true),
+        ];
+
+        using PdfDocument pdf = PdfDocument.Create();
+        var diagnostics = new PdfExportDiagnostics();
+        var map = new FontMap(pdf, new PdfExportOptions(), diagnostics);
+        string[] names = faces.Select(face =>
+                Assert.IsType<EmbeddedTrueTypeFont>(
+                    map.Resolve("Times New Roman", face.Bold, face.Italic)).Program.PostScriptName)
+            .ToArray();
+
+        Assert.Empty(diagnostics.SubstitutedFonts);
+        Assert.Contains("TimesNewRomanPSMT", names);
+        Assert.Contains("TimesNewRomanPS-BoldMT", names);
+        Assert.Contains("TimesNewRomanPS-ItalicMT", names);
+        Assert.Contains("TimesNewRomanPS-BoldItalicMT", names);
     }
 }

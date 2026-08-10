@@ -38,6 +38,8 @@ Additionally:
 // One-off evaluation of an expression that is not stored anywhere
 CellValue total = book.Evaluate("SUM(Report!A1:A2)*1.2");
 CellValue local = sheet.Evaluate("A1+1", originCell: "B5"); // relative refs from B5
+CellValue copied = sheet.EvaluateCopied(                 // formula copied B1 -> B500
+    "$A1>0", new CellRef(1, 2), new CellRef(500, 2));
 
 // Value with lazy recalculation
 double value = sheet.Cell("A3").CalculatedValue.GetNumber();
@@ -52,6 +54,13 @@ book.Calculate(new CalculateOptions
 
 `Calculate` is synchronous: the work is entirely CPU-bound, and wrapping it in `Task` would
 be misleading. `Workbook` is not thread-safe; the engine is single-threaded.
+
+`EvaluateCopied` keeps the original formula text as the compiled-program cache key and applies the
+row/column copy offset only while executing it. This is the intended callback for conditional
+formatting over a large range: mixed references retain their `$` axes without creating one
+translated formula string and one cached program per target. Each public call is an independent
+calculation pass; volatile `NOW()`/`TODAY()` values are therefore frozen within a call, not across a
+caller-managed loop of calls.
 
 ## Table references and local names
 

@@ -1,3 +1,4 @@
+using Cellwright.Model;
 using Cellwright.Styles;
 using Inkwright;
 
@@ -25,18 +26,82 @@ internal sealed partial class SheetComposer
         var cells = new CellPlacer(_context, _sheet, grid, page, columnSlots, rowSlots)
         {
             Tags = _tags,
+            Comments = _comments,
             PageReach = _geometry.ContentWidth / (page.Scale > 0 ? page.Scale : 1),
             Conditional = _conditional,
         };
-        cells.Fills();
+
+        bool hasConditionalFormats = _conditional.HasRules;
+        bool drawStyles = hasConditionalFormats ||
+            AnyOccupiedOnPage(_sheet.StyleIndexes, columnSlots, rowSlots);
+        bool drawText = hasConditionalFormats || _tags is not null || _comments is not null ||
+            AnyOccupiedOnPage(_sheet.Values, columnSlots, rowSlots);
+
+        if (drawStyles)
+            cells.Fills();
 
         if (_setup.PrintGridLines)
             GridLines(page, columnSlots, rowSlots);
 
-        cells.Borders();
-        cells.Text();
+        if (drawStyles)
+            cells.Borders();
+
+        if (drawText)
+            cells.Text();
+
         cells.Links();
         Pictures(page, grid, columnSlots, rowSlots);
+    }
+
+    /// <summary>Whether any occupied grid slot belongs to the band or repeated titles of a page.</summary>
+    /// <remarks>
+    /// Repeated titles and the page band can sit thousands of rows apart. Treating their common
+    /// bounding rectangle as the page would repeatedly scan the gap, so each of the at most four
+    /// title/band rectangles is checked separately.
+    /// </remarks>
+    private static bool AnyOccupiedOnPage<T>(SheetGrid<T> grid, PageSlots columns, PageSlots rows)
+    {
+        int bandColumns = columns.Count - columns.Titles;
+        int bandRows = rows.Count - rows.Titles;
+
+        return Occupied(grid, columns, 0, columns.Titles, rows, 0, rows.Titles) ||
+            Occupied(grid, columns, columns.Titles, bandColumns, rows, 0, rows.Titles) ||
+            Occupied(grid, columns, 0, columns.Titles, rows, rows.Titles, bandRows) ||
+            Occupied(grid, columns, columns.Titles, bandColumns, rows, rows.Titles, bandRows);
+    }
+
+    private static bool Occupied<T>(
+        SheetGrid<T> grid,
+        PageSlots columns,
+        int firstColumnSlot,
+        int columnCount,
+        PageSlots rows,
+        int firstRowSlot,
+        int rowCount)
+    {
+        if (columnCount == 0 || rowCount == 0)
+            return false;
+
+        (int firstRow, int lastRow) = Bounds(rows.Lines, firstRowSlot, rowCount);
+        (int firstColumn, int lastColumn) = Bounds(columns.Lines, firstColumnSlot, columnCount);
+        return grid.AnyOccupied(new RangeRef(
+            new CellRef(firstRow, firstColumn),
+            new CellRef(lastRow, lastColumn)));
+    }
+
+    private static (int First, int Last) Bounds(int[] lines, int start, int count)
+    {
+        int first = lines[start];
+        int last = first;
+        int end = start + count;
+
+        for (int i = start + 1; i < end; i++)
+        {
+            first = Math.Min(first, lines[i]);
+            last = Math.Max(last, lines[i]);
+        }
+
+        return (first, last);
     }
 
     /// <summary>

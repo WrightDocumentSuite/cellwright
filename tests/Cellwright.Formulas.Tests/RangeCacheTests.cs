@@ -163,6 +163,33 @@ public sealed class RangeCacheTests
     }
 
     [Fact]
+    public void EvictionUsesTheExactLeastRecentlyUsedEntry()
+    {
+        var cache = new RangeCache(maxCells: 4);
+        CachedRange first = RangeAt(1);
+        CachedRange second = RangeAt(10);
+        CachedRange third = RangeAt(20);
+
+        cache.Add(first);
+        cache.Add(second);
+        Assert.True(cache.TryGet(first.Key, out _)); // First becomes most recently used.
+
+        cache.Add(third);
+
+        Assert.False(cache.TryGet(second.Key, out _));
+        Assert.True(cache.TryGet(first.Key, out _));
+        Assert.True(cache.TryGet(third.Key, out _));
+        Assert.Equal(2, cache.Count);
+        Assert.Equal(4, cache.RetainedCells);
+
+        static CachedRange RangeAt(int firstRow)
+        {
+            var key = new RangeKey(0, firstRow, 1, firstRow + 1, 1);
+            return new CachedRange(key, new ArrayValue(2, 1, new CellValue[2]));
+        }
+    }
+
+    [Fact]
     public void EvictionKeepsResultsCorrect()
     {
         var book = Workbook.Create();

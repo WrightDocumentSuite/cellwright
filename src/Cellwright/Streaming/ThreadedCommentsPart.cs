@@ -24,10 +24,28 @@ namespace Cellwright.Streaming;
 internal static class ThreadedCommentsPart
 {
     /// <summary>Namespace of the threaded comment elements.</summary>
-    private const string Namespace = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments";
+    private const string _namespace = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments";
 
     /// <summary>How the placeholder note names the thread it stands for.</summary>
-    private const string PlaceholderPrefix = "tc=";
+    private const string _placeholderPrefix = "tc=";
+
+    /// <summary>
+    /// Extracts the threaded root identifier from the mandatory <c>tc={uid}</c> author token.
+    /// The revision uid is only a SHOULD in MS-XLSX and is validated separately.
+    /// </summary>
+    public static bool TryGetPlaceholderId(CellComment note, out string id)
+    {
+        id = string.Empty;
+        if (note.Author is not { } author || !author.StartsWith(_placeholderPrefix, StringComparison.Ordinal))
+            return false;
+
+        string token = author[_placeholderPrefix.Length..];
+        if (!Guid.TryParse(token, out _))
+            return false;
+
+        id = token;
+        return true;
+    }
 
     /// <summary>Reads the people of a workbook.</summary>
     /// <param name="stream">The persons part.</param>
@@ -35,20 +53,60 @@ internal static class ThreadedCommentsPart
     public static void ReadPeople(Stream stream, PersonCollection people)
     {
         using var xml = XmlReader.Create(stream, XmlDefaults.ReaderSettings);
-        while (xml.Read())
+        bool advance = true;
+        while (true)
         {
-            if (xml.NodeType != XmlNodeType.Element || xml.LocalName != "person")
+            if (advance && !xml.Read())
+                break;
+            advance = true;
+
+            if (xml.NodeType != XmlNodeType.Element)
                 continue;
 
-            if (xml.GetAttribute("id") is not { Length: > 0 } id)
-                continue;
+            if (xml.LocalName == "person" && xml.NamespaceURI == _namespace)
+            {
+                bool empty = xml.IsEmptyElement;
+                if (ReadPerson(xml) is { } person)
+                    people.AddFromFile(person);
 
-            people.AddFromFile(new Person(
-                id,
-                xml.GetAttribute("displayName") ?? string.Empty,
-                Empty(xml.GetAttribute("userId")),
-                Empty(xml.GetAttribute("providerId"))));
+                advance = empty;
+                continue;
+            }
+
+            if (xml.LocalName == "extLst" && xml.Depth == 1)
+            {
+                people.ExtensionListXml = xml.ReadOuterXml();
+                advance = false;
+            }
         }
+    }
+
+    private static Person? ReadPerson(XmlReader xml)
+    {
+        string? id = xml.GetAttribute("id");
+        string displayName = xml.GetAttribute("displayName") ?? string.Empty;
+        string? userId = Empty(xml.GetAttribute("userId"));
+        string? providerId = Empty(xml.GetAttribute("providerId"));
+        string? extensionList = null;
+
+        if (!xml.IsEmptyElement)
+        {
+            using XmlReader subtree = xml.ReadSubtree();
+            subtree.Read();
+            while (subtree.Read())
+            {
+                if (subtree.NodeType == XmlNodeType.Element &&
+                    subtree.LocalName == "extLst" && subtree.Depth == 1)
+                {
+                    extensionList = subtree.ReadOuterXml();
+                }
+            }
+        }
+
+        return id is not { Length: > 0 } ? null : new Person(id, displayName, userId, providerId)
+        {
+            ExtensionListXml = extensionList,
+        };
     }
 
     /// <summary>Reads the threaded comments of one sheet.</summary>
@@ -65,12 +123,20 @@ internal static class ThreadedCommentsPart
             advance = true;
 
             if (xml.NodeType != XmlNodeType.Element || xml.LocalName != "threadedComment")
+            {
+                if (xml.NodeType == XmlNodeType.Element && xml.LocalName == "extLst" && xml.Depth == 1)
+                {
+                    comments.ExtensionListXml = xml.ReadOuterXml();
+                    advance = false;
+                }
                 continue;
+            }
 
+            bool empty = xml.IsEmptyElement;
             if (ReadComment(xml) is { } comment)
                 comments.AddFromFile(comment);
 
-            advance = false;
+            advance = empty;
         }
     }
 
@@ -89,6 +155,8 @@ internal static class ThreadedCommentsPart
                 : null;
 
         string text = string.Empty;
+        string? mentions = null;
+        string? extensionList = null;
         if (!xml.IsEmptyElement)
         {
             using XmlReader subtree = xml.ReadSubtree();
@@ -106,6 +174,18 @@ internal static class ThreadedCommentsPart
                     text = subtree.ReadElementContentAsString();
                     advance = false;
                 }
+                else if (subtree.NodeType == XmlNodeType.Element && subtree.Depth == 1 &&
+                    subtree.LocalName == "mentions")
+                {
+                    mentions = subtree.ReadOuterXml();
+                    advance = false;
+                }
+                else if (subtree.NodeType == XmlNodeType.Element && subtree.Depth == 1 &&
+                    subtree.LocalName == "extLst")
+                {
+                    extensionList = subtree.ReadOuterXml();
+                    advance = false;
+                }
             }
         }
 
@@ -121,17 +201,19 @@ internal static class ThreadedCommentsPart
             ParentId = parentId,
             Created = created,
             Resolved = resolved,
+            MentionsXml = mentions,
+            ExtensionListXml = extensionList,
         };
     }
 
     /// <summary>Writes the persons part.</summary>
     /// <param name="xml">Where to write.</param>
     /// <param name="people">The people to write.</param>
-    public static void WritePeople(Utf8XmlWriter xml, IReadOnlyList<Person> people)
+    public static void WritePeople(Utf8XmlWriter xml, PersonCollection people)
     {
         xml.WriteDeclaration();
         xml.WriteRaw("<personList xmlns=\""u8);
-        xml.WriteRaw(System.Text.Encoding.UTF8.GetBytes(Namespace));
+        xml.WriteRaw(System.Text.Encoding.UTF8.GetBytes(_namespace));
         xml.WriteRaw("\" xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"u8);
 
         foreach (Person person in people)
@@ -149,8 +231,19 @@ internal static class ThreadedCommentsPart
 
             xml.WriteRaw("\" providerId=\""u8);
             xml.WriteAttributeText(person.ProviderId ?? "None");
-            xml.WriteRaw("\"/>"u8);
+            if (person.ExtensionListXml is { Length: > 0 } extensions)
+            {
+                xml.WriteRaw("\">"u8);
+                xml.WriteRawXml(extensions);
+                xml.WriteRaw("</person>"u8);
+            }
+            else
+            {
+                xml.WriteRaw("\"/>"u8);
+            }
         }
+
+        RawXml.Write(xml, people.ExtensionListXml);
 
         xml.WriteRaw("</personList>"u8);
     }
@@ -158,20 +251,23 @@ internal static class ThreadedCommentsPart
     /// <summary>Writes the threaded comments of one sheet.</summary>
     /// <param name="xml">Where to write.</param>
     /// <param name="comments">The comments to write, in file order.</param>
-    public static void Write(Utf8XmlWriter xml, IReadOnlyList<ThreadedComment> comments)
+    public static void Write(Utf8XmlWriter xml, ThreadedCommentCollection comments)
     {
         xml.WriteDeclaration();
         xml.WriteRaw("<ThreadedComments xmlns=\""u8);
-        xml.WriteRaw(System.Text.Encoding.UTF8.GetBytes(Namespace));
+        xml.WriteRaw(System.Text.Encoding.UTF8.GetBytes(_namespace));
         xml.WriteRaw("\" xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"u8);
 
         foreach (ThreadedComment comment in comments)
         {
             xml.WriteRaw("<threadedComment ref=\""u8);
             xml.WriteFormattable(comment.Cell);
-            xml.WriteRaw("\" dT=\""u8);
-            xml.WriteAttributeText(
-                (comment.Created ?? DateTimeOffset.UtcNow).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
+            if (comment.Created is { } created)
+            {
+                xml.WriteRaw("\" dT=\""u8);
+                xml.WriteAttributeText(
+                    created.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
+            }
             xml.WriteRaw("\" personId=\""u8);
             xml.WriteAttributeText(comment.PersonId);
             xml.WriteRaw("\" id=\""u8);
@@ -188,8 +284,13 @@ internal static class ThreadedCommentsPart
 
             xml.WriteRaw("\"><text>"u8);
             xml.WriteText(comment.Text);
-            xml.WriteRaw("</text></threadedComment>"u8);
+            xml.WriteRaw("</text>"u8);
+            RawXml.Write(xml, comment.MentionsXml);
+            RawXml.Write(xml, comment.ExtensionListXml);
+            xml.WriteRaw("</threadedComment>"u8);
         }
+
+        RawXml.Write(xml, comments.ExtensionListXml);
 
         xml.WriteRaw("</ThreadedComments>"u8);
     }
@@ -198,7 +299,7 @@ internal static class ThreadedCommentsPart
     /// The legacy notes a set of threads needs beside them, so that a reader which does not know
     /// about threads still shows something on those cells.
     /// </summary>
-    /// <param name="comments">The sheet's threaded comments.</param>
+    /// <param name="roots">The sheet's projected thread roots.</param>
     /// <param name="people">The workbook's people, for the name to show.</param>
     /// <remarks>
     /// One note per thread, not per message: the note stands for the conversation. Its author is
@@ -206,20 +307,18 @@ internal static class ThreadedCommentsPart
     /// first message prefixed with the author's name, which is what Excel writes.
     /// </remarks>
     public static List<CellComment> Placeholders(
-        IReadOnlyList<ThreadedComment> comments, PersonCollection people)
+        IReadOnlyList<ThreadedComment> roots, PersonCollection people)
     {
         var notes = new List<CellComment>();
-        foreach (ThreadedComment comment in comments)
+        foreach (ThreadedComment comment in roots)
         {
-            if (!comment.IsFirst)
-                continue;
-
             string author = people.ById(comment.PersonId)?.DisplayName ?? string.Empty;
             notes.Add(new CellComment
             {
                 Cell = comment.Cell,
                 Text = author.Length > 0 ? $"Comment:\n    {comment.Text}" : comment.Text,
-                Author = PlaceholderPrefix + comment.Id,
+                Author = _placeholderPrefix + comment.Id,
+                RevisionUid = comment.Id,
             });
         }
 

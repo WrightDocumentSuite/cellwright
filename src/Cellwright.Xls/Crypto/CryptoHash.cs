@@ -76,7 +76,11 @@ internal readonly record struct CryptoHash(HashAlgorithmName Algorithm, int Size
     /// </summary>
     /// <param name="seed">The hash of the salt and the password.</param>
     /// <param name="count">How many rounds the file asks for.</param>
-    public byte[] Spin(ReadOnlySpan<byte> seed, int count)
+    /// <param name="cancellationToken">Cancels a long password-stretching loop.</param>
+    public byte[] Spin(
+        ReadOnlySpan<byte> seed,
+        int count,
+        CancellationToken cancellationToken = default)
     {
         Span<byte> material = stackalloc byte[4 + MaxSize];
         Span<byte> digest = stackalloc byte[MaxSize];
@@ -84,11 +88,14 @@ internal readonly record struct CryptoHash(HashAlgorithmName Algorithm, int Size
 
         for (int i = 0; i < count; i++)
         {
+            if ((i & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             BinaryPrimitives.WriteInt32LittleEndian(material, i);
             CryptographicOperations.HashData(Algorithm, material[..(4 + Size)], digest[..Size]);
             digest[..Size].CopyTo(material[4..]);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return material.Slice(4, Size).ToArray();
     }
 }

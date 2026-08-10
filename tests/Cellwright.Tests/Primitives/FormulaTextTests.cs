@@ -136,4 +136,45 @@ public sealed class FormulaTextTests
 
         Assert.Equal("A1048576", FormulaText.Shift("A1048574", shift, "S"));
     }
+
+    [Fact]
+    public void Translate_MovesOnlyRelativeAxesFromTheSourceCell()
+    {
+        const string formula =
+            "A1+$A1+A$1+$A$1+A1:B2+A:C+$A:$C+1:2+$1:2+Other!A1+SUM(Data:Other!A1)+\"A1\"+LOG10(A1)";
+        const string expected =
+            "C4+$A4+C$1+$A$1+C4:D5+C:E+$A:$C+4:5+$1:5+Other!C4+SUM(Data:Other!C4)+\"A1\"+LOG10(C4)";
+
+        Assert.Equal(expected, FormulaText.Translate(formula, CellRef.Parse("B2"), CellRef.Parse("D5")));
+    }
+
+    [Fact]
+    public void Translate_TurnsReferencesCopiedOutsideTheGridIntoRefErrors()
+    {
+        Assert.Equal(
+            "#REF!+A1",
+            FormulaText.Translate("A1+B2", CellRef.Parse("B2"), CellRef.Parse("A1")));
+    }
+
+    [Fact]
+    public void Translate_DoesNotTreatStructuredReferenceColumnsAsCells()
+    {
+        const string formula = "Table1[A1]+[@B2]+Table1[[#Headers],[C3]]+$A1";
+
+        Assert.Equal(
+            "Table1[A1]+[@B2]+Table1[[#Headers],[C3]]+$A4",
+            FormulaText.Translate(formula, CellRef.Parse("B2"), CellRef.Parse("D5")));
+        Assert.Equal(
+            "Table[A']B2]+$A4",
+            FormulaText.Translate("Table[A']B2]+$A1", CellRef.Parse("B2"), CellRef.Parse("D5")));
+    }
+
+    [Fact]
+    public void Translate_ReturnsTheOriginalTextWhenNothingMoves()
+    {
+        const string formula = "$A$1+\"B2\"";
+
+        Assert.Same(formula, FormulaText.Translate(formula, CellRef.Parse("A1"), CellRef.Parse("C3")));
+        Assert.Same("A1", FormulaText.Translate("A1", CellRef.Parse("B2"), CellRef.Parse("B2")));
+    }
 }

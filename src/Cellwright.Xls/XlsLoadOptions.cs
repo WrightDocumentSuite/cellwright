@@ -5,6 +5,9 @@ namespace Cellwright.Xls;
 /// </summary>
 public sealed class XlsLoadOptions
 {
+    private DocumentLoadBudget _budget = DocumentLoadBudget.Default;
+    private PackageLimits? _legacyLimits;
+
     /// <summary>
     /// Password to open an encrypted workbook, binary or packaged: <see cref="Spreadsheet"/>
     /// uses it for an .xlsx locked with a password to open as well. Excel's own default password
@@ -18,12 +21,28 @@ public sealed class XlsLoadOptions
     /// </summary>
     public int FallbackCodePage { get; set; } = 1252;
 
+    /// <summary>Shared ceilings for source bytes, container/package expansion, cells and resources.</summary>
+    public DocumentLoadBudget Budget
+    {
+        get => EffectiveBudget;
+        set
+        {
+            _budget = value ?? throw new ArgumentNullException(nameof(value));
+            _legacyLimits = null;
+        }
+    }
+
     /// <summary>
-    /// Bounds the input held in memory and every stream extracted from an MS-CFB container.
-    /// The defaults are shared with the OOXML reader; <see cref="PackageLimits.None"/> removes
-    /// them for a file whose origin is trusted.
+    /// Compatibility view of the former package-only limits. Setting it updates input,
+    /// per-stream and total-inflated ceilings in <see cref="Budget"/>.
     /// </summary>
-    public PackageLimits Limits { get; set; } = PackageLimits.Default;
+    public PackageLimits Limits
+    {
+        get => _legacyLimits ?? PackageLimits.From(_budget);
+        set => _legacyLimits = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    internal DocumentLoadBudget EffectiveBudget => _legacyLimits?.ApplyTo(_budget) ?? _budget;
 
     /// <summary>Whether to leave the source stream open after reading.</summary>
     public bool LeaveOpen { get; set; }

@@ -114,7 +114,9 @@ internal sealed class ConditionalFormatCollector
 
         // The activity formula, the flags, the priority and the template parameters sit between
         // the formulas and the graded parameters, all of them fixed width bar the first.
-        SkipParsedFormula(body, ref offset);
+        bool hasActivityFormula = offset + 2 <= body.Length &&
+            BinaryPrimitives.ReadUInt16LittleEndian(body[offset..]) != 0;
+        string? activityFormula = ReadParsedFormula(body, ref offset, decoder, sheetIndex);
         bool stopIfTrue = offset < body.Length && (body[offset] & 0x02) != 0;
         offset += 1;
         int priority = offset + 2 <= body.Length ? BinaryPrimitives.ReadUInt16LittleEndian(body[offset..]) : 0;
@@ -124,14 +126,25 @@ internal sealed class ConditionalFormatCollector
 
         ConditionalFormatRule? graded = conditionType switch
         {
-            0x03 => ReadColorScale(body, offset),
-            0x04 => ReadDataBar(body, offset),
-            0x06 => ReadIconSet(body, offset),
+            0x03 => ReadColorScale(body, offset, decoder, sheetIndex),
+            0x04 => ReadDataBar(body, offset, decoder, sheetIndex),
+            0x06 => ReadIconSet(body, offset, decoder, sheetIndex),
             _ => null,
         };
 
         if (graded is not null)
         {
+            if (hasActivityFormula && activityFormula is null)
+            {
+                _unmodelled++;
+                return;
+            }
+
+            // The binary formats can gate a graded rule with an activity formula. Keep it in the
+            // rule's formula list so that converting the workbook does not silently discard it.
+            // fStopIfTrue MUST be zero for graded rules, so an invalid bit is deliberately ignored.
+            if (activityFormula is not null)
+                graded.Formulas = [activityFormula];
             graded.Priority = priority > 0 ? priority : _priority++;
             _rules.Add(graded);
             return;
@@ -236,17 +249,27 @@ internal sealed class ConditionalFormatCollector
         return text;
     }
 
-    /// <summary>Steps over a formula that states its own length, which the graded rules use.</summary>
-    private static void SkipParsedFormula(ReadOnlySpan<byte> body, ref int offset)
+    /// <summary>Reads a formula that states its own length, which the graded rules use.</summary>
+    private string? ReadParsedFormula(
+        ReadOnlySpan<byte> body, ref int offset, PtgDecoder decoder, int sheetIndex)
     {
         if (offset + 2 > body.Length)
         {
             offset = body.Length;
-            return;
+            return null;
         }
 
         int length = BinaryPrimitives.ReadUInt16LittleEndian(body[offset..]);
-        offset += 2 + Math.Min(length, Math.Max(0, body.Length - offset - 2));
+        offset += 2;
+        int available = Math.Min(length, Math.Max(0, body.Length - offset));
+        string? text = length > 0 && available == length
+            ? decoder.Decode(
+                body.Slice(offset, length),
+                _ranges.Count > 0 ? _ranges[0].Start : new CellRef(1, 1),
+                sheetIndex)
+            : null;
+        offset += available;
+        return text;
     }
 
     /// <summary>Reads the format block of a 2007 rule, which wraps the classic one in a length.</summary>
@@ -272,7 +295,8 @@ internal sealed class ConditionalFormatCollector
         return style;
     }
 
-    private ConditionalFormatRule? ReadColorScale(ReadOnlySpan<byte> body, int offset)
+    private ConditionalFormatRule? ReadColorScale(
+        ReadOnlySpan<byte> body, int offset, PtgDecoder decoder, int sheetIndex)
     {
         // Two counts of control points, then the value stops, then the colors.
         if (offset + 6 > body.Length)
@@ -286,7 +310,7 @@ internal sealed class ConditionalFormatCollector
         var values = new List<ConditionalValue>(stops);
         for (int i = 0; i < stops; i++)
         {
-            if (!TryReadValueObject(body, ref cursor, out ConditionalValue value))
+            if (!TryReadValueObject(body, ref cursor, decoder, sheetIndex, out ConditionalValue value))
                 return null;
 
             values.Add(value);
@@ -311,18 +335,26 @@ internal sealed class ConditionalFormatCollector
         };
     }
 
-    private ConditionalFormatRule? ReadDataBar(ReadOnlySpan<byte> body, int offset)
+    private ConditionalFormatRule? ReadDataBar(
+        ReadOnlySpan<byte> body, int offset, PtgDecoder decoder, int sheetIndex)
     {
         // Flags, the two length percentages, then the bar color and the two value stops.
         if (offset + 22 > body.Length)
             return null;
 
         bool showValue = (body[offset + 3] & 0x02) != 0;
+        int minimumLength = body[offset + 4];
+        int maximumLength = body[offset + 5];
+        // BIFF CFDatabar is stricter than SpreadsheetML and XLSB: iPercentMax MUST be
+        // greater than iPercentMin, not merely greater than or equal to it.
+        if (minimumLength >= maximumLength || maximumLength > 100)
+            return null;
+
         ExcelColor color = ReadColor(body.Slice(offset + 6, 16));
 
         int cursor = offset + 22;
-        if (!TryReadValueObject(body, ref cursor, out ConditionalValue minimum) ||
-            !TryReadValueObject(body, ref cursor, out ConditionalValue maximum))
+        if (!TryReadValueObject(body, ref cursor, decoder, sheetIndex, out ConditionalValue minimum) ||
+            !TryReadValueObject(body, ref cursor, decoder, sheetIndex, out ConditionalValue maximum))
         {
             return null;
         }
@@ -337,11 +369,14 @@ internal sealed class ConditionalFormatCollector
                 Maximum = maximum,
                 Color = color,
                 ShowValue = showValue,
+                MinimumLength = minimumLength,
+                MaximumLength = maximumLength,
             },
         };
     }
 
-    private ConditionalFormatRule? ReadIconSet(ReadOnlySpan<byte> body, int offset)
+    private ConditionalFormatRule? ReadIconSet(
+        ReadOnlySpan<byte> body, int offset, PtgDecoder decoder, int sheetIndex)
     {
         if (offset + 6 > body.Length)
             return null;
@@ -361,10 +396,13 @@ internal sealed class ConditionalFormatCollector
         var values = new List<ConditionalValue>(states);
         for (int i = 0; i < states; i++)
         {
-            if (!TryReadValueObject(body, ref cursor, out ConditionalValue value))
+            if (!TryReadValueObject(body, ref cursor, decoder, sheetIndex, out ConditionalValue value))
                 return null;
 
-            values.Add(value);
+            if (cursor + 5 > body.Length)
+                return null;
+
+            values.Add(value with { GreaterThanOrEqual = body[cursor] != 0 });
             cursor += 5;    // Whether the threshold is inclusive, then four unused bytes.
         }
 
@@ -386,7 +424,12 @@ internal sealed class ConditionalFormatCollector
     /// Reads one value object: how the stop is placed, and either the formula that computes it
     /// or the number that is it.
     /// </summary>
-    private static bool TryReadValueObject(ReadOnlySpan<byte> body, ref int offset, out ConditionalValue value)
+    private bool TryReadValueObject(
+        ReadOnlySpan<byte> body,
+        ref int offset,
+        PtgDecoder decoder,
+        int sheetIndex,
+        out ConditionalValue value)
     {
         value = ConditionalValue.Minimum;
         if (offset + 3 > body.Length)
@@ -395,14 +438,34 @@ internal sealed class ConditionalFormatCollector
         byte type = body[offset];
         int formulaLength = BinaryPrimitives.ReadUInt16LittleEndian(body[(offset + 1)..]);
         offset += 3;
+        if (type is not (0x01 or 0x02 or 0x03 or 0x04 or 0x05 or 0x07))
+            return false;
 
         if (formulaLength > 0)
         {
-            // A stop given by a formula: the model keeps the expression, not its result, and
-            // rendering it back is the writer's problem — which this library leaves to xlsx.
-            offset += Math.Min(formulaLength, Math.Max(0, body.Length - offset));
-            value = new ConditionalValue(ConditionalValueType.Formula, null);
-            return type != 0x00;
+            if (formulaLength > body.Length - offset)
+            {
+                offset = body.Length;
+                return false;
+            }
+
+            CellRef anchor = _ranges.Count > 0 ? _ranges[0].Start : new CellRef(1, 1);
+            string? formula = decoder.Decode(body.Slice(offset, formulaLength), anchor, sheetIndex);
+            offset += formulaLength;
+            if (formula is null)
+                return false;
+
+            // fmla supplies X; it does not erase whether X is an absolute number, a percentage,
+            // or a percentile. Only cfvoType 0x07 is the unqualified formula kind.
+            value = type switch
+            {
+                0x01 => new ConditionalValue(ConditionalValueType.Number, formula),
+                0x04 => new ConditionalValue(ConditionalValueType.Percent, formula),
+                0x05 => new ConditionalValue(ConditionalValueType.Percentile, formula),
+                0x07 => ConditionalValue.Formula(formula),
+                _ => ConditionalValue.Formula(formula),
+            };
+            return type is 0x01 or 0x04 or 0x05 or 0x07;
         }
 
         // The minimum and the maximum of the range carry no number of their own.
@@ -411,6 +474,11 @@ internal sealed class ConditionalFormatCollector
             value = type == 0x02 ? ConditionalValue.Minimum : ConditionalValue.Maximum;
             return true;
         }
+
+        // The formula-only kind has no numeric fallback. Accepting an empty formula as a
+        // number changes the threshold's meaning and lets a malformed CFVO travel to xlsx.
+        if (type == 0x07)
+            return false;
 
         if (offset + 8 > body.Length)
             return false;
@@ -429,28 +497,71 @@ internal sealed class ConditionalFormatCollector
     }
 
     /// <summary>
-    /// Reads a 16-byte color: how it is stated, the value, and a tint the model drops. The
-    /// value is four bytes in painting order — red, green, blue, alpha — not a packed integer.
+    /// Reads a 16-byte color: how it is stated, the value, and its tint. The RGB value is four
+    /// bytes in painting order — red, green, blue, alpha — not a packed integer.
     /// </summary>
     private static ExcelColor ReadColor(ReadOnlySpan<byte> body)
     {
+        if (body.Length < 16)
+            return ExcelColor.Auto;
+
         uint kind = BinaryPrimitives.ReadUInt32LittleEndian(body);
         return kind switch
         {
-            // An index into the palette, an explicit RGB, or a theme slot the model cannot name.
+            // An index into the palette, an explicit RGB, or a theme slot with its Xnum tint.
             0x01 => ExcelColor.FromIndexed(body[4] & 0x7F),
-            0x02 => ExcelColor.FromRgb(body[4], body[5], body[6]),
+            0x02 => ExcelColor.FromArgb(
+                ((uint)body[7] << 24) |
+                ((uint)body[4] << 16) |
+                ((uint)body[5] << 8) |
+                body[6]),
+            0x03 => ReadThemeColor(body),
             _ => ExcelColor.Auto,
         };
     }
+
+    private static ExcelColor ReadThemeColor(ReadOnlySpan<byte> body)
+    {
+        uint index = BinaryPrimitives.ReadUInt32LittleEndian(body[4..]);
+        double tint = BinaryPrimitives.ReadDoubleLittleEndian(body[8..]);
+
+        // ColorTheme permits 0..11 generally, but CF12 specifically forbids followed-link
+        // slot 11. Validate before the uint-to-int conversion so hostile input cannot wrap to
+        // a negative theme index and make ExcelColor.FromTheme throw.
+        return index <= 10 && double.IsFinite(tint) && tint is >= -1 and <= 1
+            ? ExcelColor.FromTheme(SwapDarkAndLight((int)index), tint)
+            : ExcelColor.Auto;
+    }
+
+    /// <summary>Exchanges the two dark/light theme pairs used in binary color structures.</summary>
+    private static int SwapDarkAndLight(int index) => index switch
+    {
+        0 => 1,
+        1 => 0,
+        2 => 3,
+        3 => 2,
+        _ => index,
+    };
 
     /// <summary>
     /// Names the icon set the way the modern format does, since the model speaks that. The
     /// binary set numbers are the same in BIFF8 and BIFF12, so the <c>.xlsb</c> reader shares
     /// this table.
     /// </summary>
-    internal static string? IconSetName(byte id, int states) => id switch
+    internal static string? IconSetName(byte id, int states)
     {
+        int expectedStates = id switch
+        {
+            <= 0x07 => 3,
+            <= 0x0C => 4,
+            <= 0x10 => 5,
+            _ => 0,
+        };
+        if (states != expectedStates)
+            return null;
+
+        return id switch
+        {
         0x00 => "3Arrows",
         0x01 => "3ArrowsGray",
         0x02 => "3Flags",
@@ -468,14 +579,9 @@ internal sealed class ConditionalFormatCollector
         0x0E => "5ArrowsGray",
         0x0F => "5Rating",
         0x10 => "5Quarters",
-        _ => states switch
-        {
-            3 => "3TrafficLights1",
-            4 => "4TrafficLights",
-            5 => "5Rating",
             _ => null,
-        },
-    };
+        };
+    }
 
     /// <summary>Reads the range list that closes the group header.</summary>
     private static IReadOnlyList<RangeRef> ReadRanges(ReadOnlySpan<byte> body, int offset)

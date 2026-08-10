@@ -136,8 +136,42 @@ internal sealed class FontMap
         if (FindFile(family, bold, italic) is { } path)
             return _pdf.Fonts.Embed(path, _options.SubsetFonts);
 
-        string? system = SystemFonts.Find(family, bold, italic);
+        string? system = FindSystemFont(family, bold, italic);
         return system is null ? null : _pdf.Fonts.Embed(system, _options.SubsetFonts);
+    }
+
+    /// <summary>
+    /// Resolves installed Office faces while remaining compatible with Inkwright releases that
+    /// indexed only font filenames. Windows uses abbreviated files such as <c>times.ttf</c> and
+    /// <c>cour.ttf</c>, which cannot otherwise be found from their workbook family names.
+    /// </summary>
+    private static string? FindSystemFont(string family, bool bold, bool italic)
+    {
+        string? path = SystemFonts.Find(family, bold, italic);
+        if (path is not null || !OperatingSystem.IsWindows())
+            return path;
+
+        string compact = new(family.Where(char.IsAsciiLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+        string? stem = compact switch
+        {
+            _ when compact.StartsWith("timesnewroman", StringComparison.Ordinal) || compact == "timesroman" => "times",
+            _ when compact.StartsWith("couriernew", StringComparison.Ordinal) || compact == "courier" => "cour",
+            _ when compact.StartsWith("arial", StringComparison.Ordinal) => "arial",
+            _ => null,
+        };
+        if (stem is null)
+            return null;
+
+        string suffix = (bold, italic) switch
+        {
+            (true, true) => "bi",
+            (true, false) => "bd",
+            (false, true) => "i",
+            _ => string.Empty,
+        };
+        string candidate = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Fonts", stem + suffix + ".ttf");
+        return File.Exists(candidate) ? candidate : null;
     }
 
     /// <summary>

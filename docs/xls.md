@@ -33,22 +33,26 @@ with xlsx contents are common — `Spreadsheet.LoadAsync` detects it by signatur
 Workbook book = await Spreadsheet.LoadAsync(uploadedFile);   // xlsx or xls, either way
 ```
 
-The binary file and each extracted CFB stream are limited by the same `PackageLimits` as xlsx:
+The binary file, CFB directory and streams, BIFF cells and strings, pictures, and embedded objects
+use the same `DocumentLoadBudget` as xlsx:
 
 ```csharp
 var options = new XlsLoadOptions
 {
-    Limits = new PackageLimits
+    Budget = DocumentLoadBudget.Default with
     {
-        MaxPartSize = 64 * 1024 * 1024,
-        MaxTotalSize = 256 * 1024 * 1024,
+        MaxInputBytes = 64 * 1024 * 1024,
+        MaxPartBytes = 64 * 1024 * 1024,
+        MaxInflatedBytes = 256 * 1024 * 1024,
+        MaxCells = 2_000_000,
     },
 };
 Workbook book = await Spreadsheet.LoadAsync(uploadedFile, options);
 ```
 
-The check runs before allocating an array from the stream's declared size. For a trusted file,
-you can disable it with `PackageLimits.None`.
+The check runs before allocating an array from a declared size. `PackageLimits` and `Limits` remain
+compatible; `PackageLimits.None` disables every ceiling as before. Prefer a finite custom budget
+for uploads. See [Loading untrusted spreadsheets](loading-untrusted-input.md).
 
 Without this package, the core does not fail silently on a binary file: `Workbook.LoadAsync`
 recognizes the CFB signature and throws `XlsxFormatException` with text saying to add
@@ -95,11 +99,20 @@ named cipher accepts: a mismatch means the descriptor and data disagree, and dec
 plausible garbage. The extensible scheme with an external crypto module and DESX cipher are
 rejected with the cipher name in the message.
 
+The agile descriptor is untrusted XML, not just algorithm configuration. In addition to the shared
+XML budget, it has a 1 MiB format ceiling checked from the CFB directory before its stream or any
+XML attribute is materialized. Every Base64 salt, verifier, wrapped-key, and HMAC attribute is also
+capped at 4 Ki encoded characters before allocating its decoded buffer. Real descriptors use only a
+small fraction of either limit; an oversized descriptor or field is rejected as `XlsFormatException`.
+
 Agile files have an HMAC over the encrypted package (MS-OFFCRYPTO 2.3.4.14). It is verified: a
 file modified after writing still reads, but comes with a `PackageIntegrityFailed` warning.
 
-The decrypted package is read by the regular `Workbook.LoadAsync`, so preservation of unknown parts
-works as usual. Loading warns with `EncryptedWorkbook`.
+The decrypted package enters the same core workbook loader, so preservation of unknown parts works
+as usual. The outer CFB directory/streams, encryption descriptor, decrypted OPC parts and any
+nested resources share one `DocumentLoadBudget` state; format detection does not reset its counters.
+Password stretching and package decryption observe the caller's cancellation token. Loading warns
+with `EncryptedWorkbook`.
 
 `XlsWorkbook.LoadAsync` does not guess on such a file: it says it is an encrypted package and
 points you to `Spreadsheet.LoadAsync`. Without this package, the core is honest about the
@@ -143,7 +156,7 @@ that would touch every record `BiffWriter` writes.
 | Nested substreams | Embedded chart — substream inside a sheet: skipped entirely; records after it (comments, window, merges) are read as part of the sheet |
 | Comments | Note + Obj (ftCmo) + TxO: anchor, author, and text from Continue fragments → `Worksheet.Comments` |
 | Print | Setup, margins, Header/Footer (+ HeaderFooter 0x089C), HCenter/VCenter, PrintGrid/PrintRowCol, WsBool, page breaks |
-| Conditional formatting | CondFmt/CF (comparison and formula, DXFN → `DifferentialStyle`), CondFmt12/CF12 (color scales, data bars, icon sets) |
+| Conditional formatting | CondFmt/CF (comparison and formula, DXFN → `DifferentialStyle`), CondFmt12/CF12 (activity and CFVO formulas, theme colors with tint, color scales, data bars including minimum/maximum lengths, icon sets including strict/inclusive thresholds) |
 | Workbook | BoundSheet8 (names, three visibility states), Date1904, CodePage, Lbl, SupBook/ExternSheet |
 | Encryption | FilePass: XOR, RC4, RC4 CryptoAPI; and encrypted xlsx package in the same container |
 | Macros | VBA project from `_VBA_PROJECT_CUR` storage — separate API, not through the model ([vba.md](vba.md)) |
@@ -254,6 +267,7 @@ broken. Codes specific to the binary format:
 | `TextTooLong` | Text longer than 32767 characters was truncated |
 | `UnwritableFormula` | On write: formula or validation rule has no BIFF encoding |
 | `ConditionalFormatsNotWritten` | On write: rule type with no classic record (scale, data bar, icons, rank, average, duplicates, period) |
+| `ThreadedCommentsNotWritten` | On write: threaded comments have no representation in the legacy format; convert them to classic comments to retain their text |
 
 ## Known limitations
 
@@ -277,6 +291,9 @@ broken. Codes specific to the binary format:
 - **Comments**: read and written for BIFF8; Note from older generations is structured differently
   and is not parsed. Read comments belong to the model, so saving to xlsx regenerates comment parts
   and VML — with default box geometry.
+- **Threaded comments** were introduced after the `.xls` format and are not written. Each affected
+  sheet raises `ThreadedCommentsNotWritten`; convert the messages to classic comments before export
+  when their review text must survive.
 - **Conditional formatting is partially written.** Classic `CondFmt`/`CF` records know exactly two
   condition kinds: cell comparison with one or two formulas, and a formula that is true or false on
   its own. Both are written, together with differential format (font, color, borders, number format)

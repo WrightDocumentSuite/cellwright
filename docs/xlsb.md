@@ -59,7 +59,7 @@ binary form.
 | Sheet structure | Rows (height, hidden, outline, style), columns, merged cells, hyperlinks |
 | Data validation | `BrtDVal`: ranges, type, operator, both condition formulas, input and error messages |
 | Notes | Separate part by relationship: author list and text of each note |
-| Conditional formatting | `BrtBeginCFRule`: value comparison, expression, text, blanks, errors, duplicates, average, top/bottom; color scales, data bars, and icon sets from their own records (`BrtBeginColorScale`/`BrtBeginDatabar`/`BrtBeginIconSet` + `BrtCFVO`/`BrtColor`) |
+| Conditional formatting | `BrtBeginCFRule`: value comparison, expression, text, blanks, errors, duplicates, average, top/bottom; graded activity formulas; color scales, data bars (including length limits), and icon sets (including `fGTE` thresholds) from their own records (`BrtBeginColorScale`/`BrtBeginDatabar`/`BrtBeginIconSet` + formula-aware `BrtCFVO`/`BrtColor`). `BrtDXF` properties are decoded into `DifferentialStyle` (font, fill, borders, and number format), attached by `dxfId`, and retained when converting `.xlsb` to `.xlsx`. |
 | Tables | Table parts by relationship: name, range, header, totals, and column names |
 | Structured references | `PtgList` rendered as `Table[Column]`, including `[#Data]`, `[#Headers]`, `[@]`, and column ranges |
 | Pictures | Drawing part by relationship — the same DrawingML as xlsx; see [pictures.md](pictures.md) |
@@ -164,7 +164,9 @@ This deserves to be stated plainly because a green run does not show it. **There
 formatting or tables in any of the 66 corpus files** — nor hyperlinks, for that matter.
 Those readers — including color scales, data bars, and icon sets — are verified by fixtures built
 byte-by-byte in tests from MS-XLSB, and that only shows the code agrees with the spec reading
-baked into the same test. It does not show agreement with Excel and does not replace a real file.
+baked into the same test. The `BrtDXF` property bytes were additionally checked against files
+created by Excel 16, but the committed regression is still synthetic; neither check replaces a
+real conditional-formatting file in the corpus.
 
 By contrast: values, formulas, notes, and data validation are touched by the corpus, and the
 cross-format oracle works there — independent reading of the same content by different code.

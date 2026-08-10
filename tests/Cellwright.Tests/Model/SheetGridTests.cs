@@ -53,6 +53,37 @@ public sealed class SheetGridTests
     }
 
     [Fact]
+    public void EnumerateOccupiedRange_ClipsBothSidesOfAPageBoundary()
+    {
+        var grid = new SheetGrid<int>();
+        grid.Set(511, 1, 511);
+        grid.Set(512, 1, 512);
+        grid.Set(513, 1, 513);
+        grid.Set(514, 1, 514);
+        grid.Set(512, 2, 1_512);
+        grid.Set(513, 2, 1_513);
+        grid.Set(512, 3, 2_512);
+
+        Assert.Equal(
+            [(512, 1, 512), (513, 1, 513), (512, 2, 1_512), (513, 2, 1_513)],
+            grid.EnumerateOccupied(RangeRef.Parse("A512:B513")));
+    }
+
+    [Fact]
+    public void AnyOccupiedRange_ObservesTheExactPageBoundary()
+    {
+        var grid = new SheetGrid<int>();
+        grid.Set(512, 2, 12);
+        grid.Set(513, 2, 13);
+
+        Assert.False(grid.AnyOccupied(RangeRef.Parse("B511:B511")));
+        Assert.True(grid.AnyOccupied(RangeRef.Parse("B512:B512")));
+        Assert.True(grid.AnyOccupied(RangeRef.Parse("B513:B513")));
+        Assert.False(grid.AnyOccupied(RangeRef.Parse("B514:B1024")));
+        Assert.False(grid.AnyOccupied(RangeRef.Parse("C1:C1048576")));
+    }
+
+    [Fact]
     public void ShiftRows_InsertMovesLaterRowsDownAndLeavesAGap()
     {
         var grid = new SheetGrid<int>();

@@ -34,6 +34,9 @@ internal sealed class CalculationEngine
     /// <summary>Materialized ranges retained between passes; inspected by tests and benchmarks.</summary>
     internal RangeCache Ranges => _context.Ranges;
 
+    /// <summary>Number of distinct formula texts retained by all compiled-program caches.</summary>
+    internal int ProgramCount => _programs.Count + _context.NestedProgramCount;
+
     /// <summary>Recalculates the workbook and reports what happened.</summary>
     public CalculationSummary Calculate(CalculateOptions options)
     {
@@ -82,10 +85,45 @@ internal sealed class CalculationEngine
         if (program is null)
             throw failure!;
 
-        _context.BeginPass();
+        BeginAdHocPass();
         _context.MoveTo(sheet, cell);
         FormulaValue value = _evaluator.Evaluate(program, _context);
         return Operators.Dereference(value, _context);
+    }
+
+    /// <summary>
+    /// Evaluates one stored formula as copied from <paramref name="source"/> to
+    /// <paramref name="target"/>. The source text is the cache key, while relative references
+    /// receive the copy offset only during execution.
+    /// </summary>
+    public CellValue EvaluateAdHocCopied(
+        string formula, Worksheet sheet, CellRef source, CellRef target)
+    {
+        FormulaProgram? program = _programs.GetOrParse(formula, out FormulaParseException? failure);
+        if (program is null)
+            throw failure!;
+
+        BeginAdHocPass();
+        _context.MoveTo(sheet, target);
+        FormulaValue value = _evaluator.Evaluate(
+            program,
+            _context,
+            target.Row - source.Row,
+            target.Column - source.Column);
+        return Operators.Dereference(value, _context);
+    }
+
+    /// <summary>
+    /// Starts an independent one-formula calculation. A preceding workbook calculation may have
+    /// carried cancellation, warning and authoring-culture options; public ad-hoc evaluation must
+    /// not inherit that unrelated request's state.
+    /// </summary>
+    private void BeginAdHocPass()
+    {
+        _context.BeginPass();
+        _context.CancellationToken = CancellationToken.None;
+        _context.OnWarning = null;
+        _context.FormatCulture = System.Globalization.CultureInfo.InvariantCulture;
     }
 
     /// <summary>How many rounds a pass may repeat over the readers of moved spills.</summary>

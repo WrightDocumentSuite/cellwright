@@ -38,8 +38,10 @@ internal static class EscherPictures
     /// Reads the BLIP store out of a <c>MsoDrawingGroup</c> record. The result is indexed the
     /// way a shape names it: one-based, in store order.
     /// </summary>
-    public static List<Blip> ReadStore(ReadOnlyMemory<byte> body)
+    public static List<Blip> ReadStore(
+        ReadOnlyMemory<byte> body, DocumentLoadBudgetState? loadBudget = null)
     {
+        loadBudget ??= new DocumentLoadBudgetState(DocumentLoadBudget.Default);
         var blips = new List<Blip>();
         if (Find(body, BStoreContainer) is not { } store)
             return blips;
@@ -47,7 +49,7 @@ internal static class EscherPictures
         foreach (Record entry in Children(body, store.Start, store.Length))
         {
             if (entry.Type == FBSE)
-                blips.Add(ReadEntry(body, entry));
+                blips.Add(ReadEntry(body, entry, loadBudget));
         }
 
         return blips;
@@ -319,7 +321,8 @@ internal static class EscherPictures
     /// Reads one store entry. The image may be embedded in the entry or held in a stream of its
     /// own; only the embedded form is read, because the other lives outside this record.
     /// </summary>
-    private static Blip ReadEntry(ReadOnlyMemory<byte> owner, in Record entry)
+    private static Blip ReadEntry(
+        ReadOnlyMemory<byte> owner, in Record entry, DocumentLoadBudgetState loadBudget)
     {
         // btWin32, btMacOS, the digest, tag, size, cRef, foDelay, then four bytes of which one
         // is the name length. The name, when there is one, sits between them and the BLIP.
@@ -332,7 +335,7 @@ internal static class EscherPictures
             return default;
 
         foreach (Record blip in Children(owner, entry.Start + offset, entry.Length - offset))
-            return ReadBlip(owner, blip);
+            return ReadBlip(owner, blip, loadBudget);
 
         return default;
     }
@@ -342,7 +345,8 @@ internal static class EscherPictures
     /// second; past those, a raster format has a single tag byte and then the file itself,
     /// while a metafile has a header saying how the file was deflated.
     /// </summary>
-    private static Blip ReadBlip(ReadOnlyMemory<byte> owner, in Record record)
+    private static Blip ReadBlip(
+        ReadOnlyMemory<byte> owner, in Record record, DocumentLoadBudgetState loadBudget)
     {
         int offset = (record.Instance & 1) != 0 ? 32 : 16;
         if (offset >= record.Length)
@@ -352,18 +356,21 @@ internal static class EscherPictures
         {
             // PNG, JPEG, DIB, TIFF and the CMYK JPEG: the file follows the tag byte verbatim.
             case 0xF01D or 0xF01E or 0xF01F or 0xF029 or 0xF02A:
-                return new Blip(record.Slice(owner, offset + 1));
+                ReadOnlyMemory<byte> content = record.Slice(owner, offset + 1);
+                loadBudget.AddMedia(content.Length);
+                return new Blip(content);
 
             // EMF, WMF and PICT, whose file the header before it says how to inflate.
             case 0xF01A or 0xF01B or 0xF01C:
-                return ReadMetafile(owner, record, offset);
+                return ReadMetafile(owner, record, offset, loadBudget);
 
             default:
                 return default;
         }
     }
 
-    private static Blip ReadMetafile(ReadOnlyMemory<byte> owner, in Record record, int offset)
+    private static Blip ReadMetafile(
+        ReadOnlyMemory<byte> owner, in Record record, int offset, DocumentLoadBudgetState loadBudget)
     {
         const int HeaderSize = 34;
         if (offset + HeaderSize > record.Length)
@@ -373,14 +380,33 @@ internal static class EscherPictures
         byte compression = header[32];
         ReadOnlyMemory<byte> stored = record.Slice(owner, offset + HeaderSize);
         if (compression == 0xFE)
+        {
+            loadBudget.AddMedia(stored.Length);
             return new Blip(stored);
+        }
 
         try
         {
             using var input = new MemoryStream(stored.ToArray(), writable: false);
             using var inflate = new ZLibStream(input, CompressionMode.Decompress);
             using var output = new MemoryStream(1024);
-            inflate.CopyTo(output);
+            byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(81920);
+            try
+            {
+                int read;
+                while ((read = inflate.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    long observed = DocumentLoadBudgetState.AddWithoutOverflow(output.Length, read);
+                    loadBudget.EnsureMedia(observed);
+                    output.Write(buffer, 0, read);
+                }
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+            }
+
+            loadBudget.AddMedia(output.Length);
             return new Blip(output.ToArray());
         }
         catch (InvalidDataException)

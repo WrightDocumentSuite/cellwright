@@ -21,7 +21,9 @@ internal sealed class XlsbSheetParser(
     XlsGlobals globals,
     PtgDecoder decoder,
     int sheetIndex,
-    Action<WorkbookWarning> warn)
+    Action<WorkbookWarning> warn,
+    DocumentLoadBudgetState? loadBudget = null,
+    CancellationToken cancellationToken = default)
 {
     private int _row;
     private bool _hasRow;
@@ -43,6 +45,7 @@ internal sealed class XlsbSheetParser(
         var reader = new Biff12Reader(part);
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             ReadOnlySpan<byte> body = reader.Record;
             switch (reader.RecordType)
             {
@@ -218,7 +221,7 @@ internal sealed class XlsbSheetParser(
     private void ReadInlineString(WorksheetContentSink sink, ReadOnlySpan<byte> body)
     {
         int offset = 8;
-        SetCell(sink, body, Text(Biff12Values.ReadString(body, ref offset)));
+        SetCell(sink, body, Text(Biff12Values.ReadString(body, ref offset, loadBudget)));
     }
 
     /// <summary>Rich text written straight into the cell; the runs after it are not modelled.</summary>
@@ -228,7 +231,7 @@ internal sealed class XlsbSheetParser(
             return;
 
         int offset = 9;
-        SetCell(sink, body, Text(Biff12Values.ReadString(body, ref offset)));
+        SetCell(sink, body, Text(Biff12Values.ReadString(body, ref offset, loadBudget)));
     }
 
     private void ReadSharedString(WorksheetContentSink sink, ReadOnlySpan<byte> body)
@@ -237,7 +240,7 @@ internal sealed class XlsbSheetParser(
             return;
 
         int index = (int)BinaryPrimitives.ReadUInt32LittleEndian(body[8..]);
-        SetCell(sink, body, Text(globals.StringAt(index)));
+        SetCell(sink, body, Text(globals.StringAt(index), accountText: false));
     }
 
     /// <summary>
@@ -291,7 +294,7 @@ internal sealed class XlsbSheetParser(
     {
         Biff12RecordType.FmlaBool when offset < body.Length => CellValue.Boolean(body[offset++] != 0),
         Biff12RecordType.FmlaError when offset < body.Length => CellValue.Error(Biff12Values.ReadError(body[offset++])),
-        Biff12RecordType.FmlaString => Text(Biff12Values.ReadString(body, ref offset)),
+        Biff12RecordType.FmlaString => Text(Biff12Values.ReadString(body, ref offset, loadBudget)),
         _ => CellValue.Blank,
     };
 
@@ -411,6 +414,7 @@ internal sealed class XlsbSheetParser(
             return;
         }
 
+        loadBudget?.AddCellText(text);
         sink.Sheet.Formulas.Set(cell.Row, cell.Column, text);
     }
 
@@ -467,8 +471,11 @@ internal sealed class XlsbSheetParser(
     }
 
     /// <summary>Cuts text to what a cell can hold, saying so rather than dropping the cell.</summary>
-    private CellValue Text(string text)
+    private CellValue Text(string text, bool accountText = true)
     {
+        if (accountText)
+            loadBudget?.AddCellText(text);
+
         if (text.Length <= SheetLimits.MaxCellTextLength)
             return CellValue.Text(text);
 
