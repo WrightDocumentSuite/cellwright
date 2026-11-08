@@ -1,4 +1,4 @@
-* text=auto
+* text=auto eol=lf
 
 # Source and build inputs must have the same bytes in Git, local builds, and Source Link.
 *.cs          text eol=lf
