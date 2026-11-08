@@ -30,10 +30,10 @@ public enum ChartKind
     Scatter,
 
     /// <summary>Points by two values and a bubble size.</summary>
-    Bubble,
+    Bubble = 9,
 
     /// <summary>Spokes from the centre.</summary>
-    Radar,
+    Radar = 8,
 }
 
 /// <summary>
@@ -198,8 +198,11 @@ internal sealed record ChartView(ChartKind Kind, string? Title, IReadOnlyList<Ch
 /// <summary>The charts embedded on one worksheet, in the order their anchors appear.</summary>
 public sealed class ChartCollection : IReadOnlyList<Chart>
 {
-    private readonly Worksheet _sheet;
+    private readonly Worksheet? _sheet;
     private readonly List<Chart> _charts = [];
+
+    /// <summary>Creates an empty chart collection not attached to a worksheet.</summary>
+    public ChartCollection() { }
 
     internal ChartCollection(Worksheet sheet) => _sheet = sheet;
 

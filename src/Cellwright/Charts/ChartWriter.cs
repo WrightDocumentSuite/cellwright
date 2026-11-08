@@ -6,14 +6,44 @@ namespace Cellwright;
 /// <param name="ValuesReference">Reference the values come from, e.g. <c>Данные!$B$2:$B$10</c>.</param>
 /// <param name="CategoriesReference">Reference the category labels come from, or <see langword="null"/>.</param>
 /// <param name="Name">The series name, or <see langword="null"/> to leave it to the reader.</param>
-/// <param name="BubbleSizesReference">Reference the bubble sizes come from for a bubble chart, or <see langword="null"/>.</param>
-/// <param name="Kind">Optional per-series plot kind for a combined chart; defaults to the chart's kind.</param>
 public sealed record ChartSeriesDefinition(
     string ValuesReference,
     string? CategoriesReference = null,
-    string? Name = null,
-    string? BubbleSizesReference = null,
-    ChartKind? Kind = null);
+    string? Name = null)
+{
+    /// <summary>Reference the bubble sizes come from, or <see langword="null"/>.</summary>
+    public string? BubbleSizesReference { get; init; }
+
+    /// <summary>Per-series kind for a combined chart, or <see langword="null"/> for the chart's kind.</summary>
+    public ChartKind? Kind { get; init; }
+
+    /// <summary>Creates a series with optional bubble sizes and a per-series plot kind.</summary>
+    public ChartSeriesDefinition(
+        string ValuesReference, string? CategoriesReference, string? Name,
+        string? BubbleSizesReference, ChartKind? Kind = null)
+        : this(ValuesReference, CategoriesReference, Name)
+    {
+        this.BubbleSizesReference = BubbleSizesReference;
+        this.Kind = Kind;
+    }
+
+    /// <summary>Creates a series with its own plot kind for a combined chart.</summary>
+    public ChartSeriesDefinition(
+        string ValuesReference, string? CategoriesReference, string? Name, ChartKind Kind)
+        : this(ValuesReference, CategoriesReference, Name, null, Kind) { }
+
+    /// <summary>Deconstructs the series including its bubble sizes and plot kind.</summary>
+    public void Deconstruct(
+        out string ValuesReference, out string? CategoriesReference, out string? Name,
+        out string? BubbleSizesReference, out ChartKind? Kind)
+    {
+        ValuesReference = this.ValuesReference;
+        CategoriesReference = this.CategoriesReference;
+        Name = this.Name;
+        BubbleSizesReference = this.BubbleSizesReference;
+        Kind = this.Kind;
+    }
+}
 
 /// <summary>
 /// Generates the <c>chartSpace</c> part of a chart the model creates.

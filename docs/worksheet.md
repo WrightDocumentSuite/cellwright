@@ -565,3 +565,12 @@ must be declared:
 - **`mc:AlternateContent`** is carried as original markup, but the reader does not choose or apply
   a `Choice` or `Fallback` branch. A value that exists only inside such a branch does not reach the
   model.
+
+## Chart API compatibility
+
+Chart kinds keep their published numeric values: Radar is 8 and Bubble is 9. Persisting or
+passing an enum value from an older compiled consumer must not reinterpret a radar chart as
+a bubble chart. `ChartSeriesDefinition` retains its original three-argument constructor and
+three-value deconstruction; bubble sizes and per-series kinds are additional properties and
+constructor overloads. The parameterless `ChartCollection` still creates an empty, unattached
+collection; use `Worksheet.Charts` when adding or editing charts on a sheet.

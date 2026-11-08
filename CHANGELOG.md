@@ -50,6 +50,11 @@ is not frozen yet.
 
 ### Fixed
 
+- Preserve the published chart enum values, the parameterless `ChartCollection` constructor,
+  and the three-argument `ChartSeriesDefinition` constructor and deconstruction API.
+- Linux PDF tests install metric-compatible fonts and check the expected Calibri-to-Carlito
+  substitution without hiding content or chart diagnostics.
+
 - `AutoFitRows` can now opt into measuring merged cells at their combined visible width, including
   merges that span several rows, through `AutoFitOptions.IncludeMergedCells`.
 - Copying a worksheet no longer shares mutable picture/chart anchors or silently points explicit

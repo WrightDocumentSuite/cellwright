@@ -17,14 +17,20 @@ public sealed class DiagnosticsTests
     }
 
     [Fact]
-    public void APlainSheetHasNothingToOwnUpTo()
+    public void APlainSheetHasNoContentDiagnostics()
     {
         Workbook book = Workbook.Create();
         Sheet(book);
 
         using Rendered rendered = Rendered.Of(book);
 
-        Assert.True(rendered.Diagnostics.IsEmpty, rendered.Diagnostics.ToString());
+        Assert.All(rendered.Diagnostics, warning =>
+        {
+            Assert.True(OperatingSystem.IsLinux(), warning.Message);
+            Assert.Equal(PdfExportWarningKind.FontSubstituted, warning.Kind);
+            Assert.Equal("Calibri", warning.Subject);
+            Assert.Contains("'Carlito'", warning.Message, StringComparison.Ordinal);
+        });
     }
 
     [Fact]

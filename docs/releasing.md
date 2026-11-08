@@ -187,3 +187,8 @@ The test projects deliberately use `xunit.v3.mtp-off` 3.2.2 with the VSTest adap
 This retains the existing `dotnet test`, TRX, filters, and coverage commands while
 removing the unused, deprecated Microsoft.Testing.Platform.MSBuild 1.9.1 dependency.
 Do not switch to the MTP v2 package without migrating those commands together.
+
+Linux PDF test geometry assumes the Office-compatible fonts installed by
+`bash eng/install-linux-fonts.sh`. Without Carlito, Calibri can fall back to a wider face and
+move chart anchors across a page boundary. Font substitution remains a diagnostic; the tests
+accept only the expected Calibri-to-Carlito message and still reject content diagnostics.
