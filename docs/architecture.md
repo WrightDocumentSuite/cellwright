@@ -1,6 +1,6 @@
 # Cellwright Architecture
 
-Cellwright is an xlsx library for .NET 10, layered like `System.Text.Json`: low-level streaming,
+Cellwright is an xlsx library for .NET, layered like `System.Text.Json`: low-level streaming,
 a document model on top, then typed mapping through a source generator. Each layer is public and
 standalone.
 

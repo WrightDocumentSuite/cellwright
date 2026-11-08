@@ -2,7 +2,9 @@
 
 [![CI](https://github.com/WrightDocumentSuite/cellwright/actions/workflows/ci.yml/badge.svg)](https://github.com/WrightDocumentSuite/cellwright/actions/workflows/ci.yml)
 
-A modern .NET 10 library for xlsx (Apache-2.0). Layered like `System.Text.Json`: primitives →
+[Website](https://wrightsuite.com/) · [Documentation](https://github.com/WrightDocumentSuite/cellwright/tree/main/docs) · [NuGet](https://www.nuget.org/packages/Cellwright)
+
+A modern .NET library for Excel spreadsheets (Apache-2.0). Layered like `System.Text.Json`: primitives →
 streaming → DOM → typed mapping through a source generator, plus a separate package for the
 formula engine.
 
