@@ -2,7 +2,7 @@
 param(
     [string] $PackageVersion,
     [string] $BaseVersion = '0.1.4',
-    [string] $BaselineVersion = '0.1.3',
+    [string] $BaselineVersion = '0.1.4',
     [string] $InkwrightVersion = '0.1.4',
     [string] $RuntimeIdentifier,
     [switch] $AllowStablePackageVersion,

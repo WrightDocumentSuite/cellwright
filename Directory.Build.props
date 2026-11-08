@@ -39,7 +39,7 @@
   <PropertyGroup Label="Opt-in release package validation">
     <!-- Package validation adds PackageDownload items during restore, so keep it out of
          ordinary local builds. eng/verify-packages.ps1 enables this gate explicitly. -->
-    <CellwrightPackageBaselineVersion>0.1.3</CellwrightPackageBaselineVersion>
+    <CellwrightPackageBaselineVersion>0.1.4</CellwrightPackageBaselineVersion>
     <EnablePackageValidation Condition="'$(CellwrightEnablePackageValidation)' == 'true'">true</EnablePackageValidation>
     <PackageValidationBaselineVersion Condition="'$(CellwrightEnablePackageValidation)' == 'true'">$(CellwrightPackageBaselineVersion)</PackageValidationBaselineVersion>
   </PropertyGroup>

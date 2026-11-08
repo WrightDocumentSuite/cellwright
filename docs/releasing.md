@@ -194,3 +194,8 @@ move chart anchors across a page boundary. Font substitution remains a diagnosti
 accept only the expected Calibri-to-Carlito message and still reject content diagnostics.
 The Hebrew bidi assertion explicitly uses DejaVu Sans on Linux because Carlito has no Hebrew
 glyphs. These font choices isolate layout and bidi checks from the runner's incidental inventory.
+
+After all five packages are indexed, advance `CellwrightPackageBaselineVersion` and the
+verifier's default `BaselineVersion` to that release, then run CI. This makes newly
+published APIs part of the next compatibility check. Keep the release tag at the
+original validated commit.
