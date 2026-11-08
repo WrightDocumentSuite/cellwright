@@ -219,6 +219,15 @@ public sealed class CellTextTests
         Worksheet sheet = Sheet(book);
         sheet["A1"] = "\u05E9\u05DC\u05D5\u05DD";
         sheet.Column("A").SetWidth(20);
+        if (OperatingSystem.IsLinux())
+        {
+            // Carlito preserves Calibri's metrics but does not contain Hebrew glyphs.
+            // The bidi assertion needs a face with the script under test.
+            sheet.Cell("A1").SetStyle(CellStyle.Default with
+            {
+                Font = FontStyle.Default with { Name = "DejaVu Sans" },
+            });
+        }
 
         using Rendered rendered = Rendered.Of(book);
         IReadOnlyList<PdfLetter> letters = [.. rendered.Letters().Where(l => l.Text.Length == 1 && l.Text[0] >= '\u0590')];
