@@ -30,9 +30,9 @@ await book.SaveAsync("report.xlsx");
   freeze panes, hidden rows and columns, grouping, auto-filter, hyperlinks, notes and threaded
   comments, Excel tables, data validation, conditional formatting, page setup, protection,
   document properties, rich text runs, embedded charts (read and create), pictures.
-- **Lossless editing of foreign files**: pivot tables, themes, macros and anything else the
-  model does not represent travels through byte for byte; renaming a sheet retargets formulas,
-  defined names and chart references.
+- **Preservation-oriented editing of foreign files**: pivot tables, themes and macros travel
+  through byte for byte while their owning structures stay intact; operations that must rebuild
+  a sheet or drawing emit coded diagnostics for opaque content they cannot safely reproduce.
 - **Styles per ISO/IEC 29500 §18.8**: immutable records with free interning, fluent builders,
   pattern and gradient fills, theme colors, cell protection.
 - **Recovery-oriented loading**: recoverable problems become coded `WorkbookWarning`s instead
@@ -54,5 +54,5 @@ await book.SaveAsync("report.xlsx");
 Guides, per-feature docs and the full list of deliberate limitations live in the repository:
 <https://github.com/WrightDocumentSuite/cellwright>
 
-Every deviation from the spec is documented and reported through diagnostics — nothing is
-silently dropped or approximated without saying so.
+Known deviations from the spec are documented. Operations that rebuild opaque package structures
+report coded diagnostics when content cannot be preserved or modelled faithfully.

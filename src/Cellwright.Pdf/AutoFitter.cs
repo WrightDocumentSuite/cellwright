@@ -36,8 +36,10 @@ internal static class AutoFitter
             if (value.IsBlank || row > lastRow || (only is int wanted && column != wanted))
                 continue;
 
-            if (!IsMeasurable(sheet, options, row, column, out CellStyle style, measurer))
+            if (!IsMeasurableRow(sheet, options, row) || TryGetMerge(sheet, row, column, out _))
                 continue;
+
+            CellStyle style = measurer.StyleOf(row, column);
 
             // A wrapped cell states how tall its row is, not how wide its column: sizing the
             // column to it would undo the wrapping the author asked for.
@@ -71,21 +73,35 @@ internal static class AutoFitter
         Dictionary<int, double> columnPoints = [];
 
         Dictionary<int, double> tallest = [];
+        List<(RangeRef Range, double Height)> merged = [];
         foreach ((int row, int column, CellValue value) in sheet.Values.EnumerateOccupied())
         {
             if (value.IsBlank || row > lastRow)
                 continue;
 
-            if (!IsMeasurable(sheet, options, row, column, out _, measurer))
+            if (!IsMeasurableRow(sheet, options, row))
                 continue;
 
-            if (!columnPoints.TryGetValue(column, out double points))
+            if (TryGetMerge(sheet, row, column, out RangeRef merge))
             {
-                points = SheetUnits.ColumnPoints(
-                    sheet.Column(column).Width ?? SheetUnits.DefaultColumnWidth, digit);
-                columnPoints[column] = points;
+                // Only the top-left cell is displayed by a merge. Values stored in cells it
+                // covers must not influence the height of content nobody sees.
+                if (!options.IncludeMergedCells || merge.Start.Row != row || merge.Start.Column != column)
+                    continue;
+
+                double width = WidthOf(sheet, merge, digit, columnPoints);
+                if (width <= 0)
+                    continue;
+
+                double mergedHeight = measurer.HeightNeeded(value, row, column, width);
+                if (merge.RowCount == 1)
+                    tallest[row] = Math.Max(tallest.GetValueOrDefault(row), mergedHeight);
+                else
+                    merged.Add((merge, mergedHeight));
+                continue;
             }
 
+            double points = ColumnPoints(sheet, column, digit, columnPoints);
             double needed = measurer.HeightNeeded(value, row, column, points);
             tallest[row] = Math.Max(tallest.GetValueOrDefault(row), needed);
         }
@@ -94,6 +110,77 @@ internal static class AutoFitter
         {
             sheet.Row(row).Height =
                 Math.Clamp(height, options.MinHeight, Math.Min(options.MaxHeight, SheetLimits.MaxRowHeight));
+        }
+
+        // A merge across several rows owns their combined height, not one row's height. Preserve
+        // an already sufficient layout and grow as few rows as necessary when the text needs more.
+        foreach ((RangeRef range, double height) in merged)
+            GrowMergedRows(sheet, range, height, options);
+    }
+
+    /// <summary>The effective width of one column, cached because rows usually reuse columns.</summary>
+    private static double ColumnPoints(
+        Worksheet sheet, int column, double digit, Dictionary<int, double> columnPoints)
+    {
+        if (columnPoints.TryGetValue(column, out double points))
+            return points;
+
+        points = SheetUnits.ColumnPoints(
+            sheet.Column(column).Width ?? SheetUnits.DefaultColumnWidth, digit);
+        columnPoints[column] = points;
+        return points;
+    }
+
+    /// <summary>The visible width of all columns a merged cell spans.</summary>
+    private static double WidthOf(
+        Worksheet sheet,
+        RangeRef range,
+        double digit,
+        Dictionary<int, double> columnPoints)
+    {
+        double width = 0;
+        for (int column = range.Start.Column; column <= range.End.Column; column++)
+        {
+            if (!sheet.Column(column).Hidden)
+                width += ColumnPoints(sheet, column, digit, columnPoints);
+        }
+
+        return width;
+    }
+
+    /// <summary>
+    /// Gives a multi-row merge enough combined height without shrinking rows whose existing total
+    /// is already sufficient. Growth starts at the anchor row and observes the per-row ceiling.
+    /// </summary>
+    private static void GrowMergedRows(
+        Worksheet sheet, RangeRef range, double needed, AutoFitOptions options)
+    {
+        double current = 0;
+        for (int row = range.Start.Row; row <= range.End.Row; row++)
+        {
+            SheetRow target = sheet.Row(row);
+            if (options.IncludeHiddenRows || !target.Hidden)
+                current += target.Height ?? SheetUnits.DefaultRowHeight;
+        }
+
+        double remaining = needed - current;
+        if (remaining <= 0)
+            return;
+
+        double maximum = Math.Min(options.MaxHeight, SheetLimits.MaxRowHeight);
+        for (int row = range.Start.Row; row <= range.End.Row && remaining > 0; row++)
+        {
+            SheetRow target = sheet.Row(row);
+            if (!options.IncludeHiddenRows && target.Hidden)
+                continue;
+
+            double height = target.Height ?? SheetUnits.DefaultRowHeight;
+            if (height >= maximum)
+                continue;
+
+            double grown = Math.Min(maximum, Math.Max(options.MinHeight, height + remaining));
+            target.Height = grown;
+            remaining -= grown - height;
         }
     }
 
@@ -105,45 +192,31 @@ internal static class AutoFitter
     }
 
     /// <summary>
-    /// Whether a cell has a say in the size of its row and column, and the style it wears.
+    /// Whether a cell's row participates in fitting.
     /// </summary>
-    /// <remarks>
-    /// A hidden row is not one the sheet is being sized for, and a merged cell is not either:
-    /// its text belongs to a rectangle rather than to any one column, so Excel leaves merges out
-    /// of auto-fitting and so does this.
-    /// </remarks>
-    private static bool IsMeasurable(
-        Worksheet sheet, AutoFitOptions options, int row, int column, out CellStyle style, CellMeasurer measurer)
-    {
-        style = measurer.StyleOf(row, column);
+    private static bool IsMeasurableRow(Worksheet sheet, AutoFitOptions options, int row) =>
+        options.IncludeHiddenRows || !sheet.Row(row).Hidden;
 
-        if (!options.IncludeHiddenRows && sheet.Row(row).Hidden)
-            return false;
-
-        return !IsMerged(sheet, row, column);
-    }
-
-    /// <summary>Whether a cell lies inside any of the sheet's merges.</summary>
+    /// <summary>Finds the merge a cell lies inside, if any.</summary>
     /// <remarks>
     /// Scanned rather than indexed: a merge is a rectangle of any size the sheet allows, and one
     /// spanning every column would cost an index entry per column. Sheets carry few merges, and a
     /// sheet with none — the common case — never reaches the loop at all.
     /// </remarks>
-    private static bool IsMerged(Worksheet sheet, int row, int column)
+    private static bool TryGetMerge(Worksheet sheet, int row, int column, out RangeRef found)
     {
         IReadOnlyList<RangeRef> merges = sheet.MergedRanges;
-        if (merges.Count == 0)
-            return false;
-
         foreach (RangeRef merge in merges)
         {
             if (row >= merge.Start.Row && row <= merge.End.Row &&
                 column >= merge.Start.Column && column <= merge.End.Column)
             {
+                found = merge;
                 return true;
             }
         }
 
+        found = default;
         return false;
     }
 }

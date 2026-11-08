@@ -1,5 +1,5 @@
-using Xunit;
 using Cellwright.IO;
+using Xunit;
 
 namespace Cellwright.Tests.Model;
 

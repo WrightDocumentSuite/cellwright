@@ -106,8 +106,9 @@ is closed. The foreign file itself is never opened. The cache is also available 
 - **Shared formulas** (`<f t="shared" si="…"/>`) are preserved as a group on load, and the first
   `Calculate()` expands them into ordinary formulas with shifted relative references. Without
   `Cellwright.Formulas`, group members remain without formula text — the core warns about this.
-- **Array formulas** keep the `ref` attribute and are written back as `t="array"`; only the
-  top-left cell is evaluated (spill is not supported).
+- **Array formulas** keep the `ref` attribute and are written back as `t="array"`. Dynamic array
+  formulas spill into neighbouring blank cells (`Worksheet.GetSpillRange` / `GetSpillOrigin`), or
+  yield `#SPILL!` when blocked.
 - **`fullCalcOnLoad`**: after a successful recalculation with no cycles, the flag is not written,
   and Excel opens the file with our values. An uncalculated workbook keeps the flag.
 - **`calcChain.xml`** is ignored on read and not created on write: our own graph is more reliable,
@@ -176,6 +177,12 @@ follows Excel. The full list of eighteen divergences, with MS-OI29500 section re
 - **`LET`** binds names for one formula: `LET(x,A1*2,y,x+1,x*y)`. Each value sees names declared
   before it, but not itself; nested `LET` shadows outer names; outside its call the name is an
   ordinary defined name again.
+- **`LAMBDA` and higher-order functions**: `LAMBDA([param1, ...], body)` creates a first-class
+  closure that captures outer `LET`/`LAMBDA` lexical bindings, can be stored in a workbook or
+  sheet Defined Name (`book.DefinedNames.Add("AddTax", "LAMBDA(x, rate, x*(1+rate))")`), invoked
+  directly (`LAMBDA(x, x+1)(5)`), or passed to `MAP`, `REDUCE`, `SCAN`, `MAKEARRAY`, `BYROW`, and
+  `BYCOL`. Omitted arguments in a lambda call are detected via `ISOMITTED(param)`. On save/load,
+  `_xlfn.` and `_xlpm.` parameter prefixes are stripped on read and restored on write.
 - **Implicit intersection**: a range in scalar context narrows to the formula row or column; empty
   intersection yields `#VALUE!`.
 - **Criteria** for `SUMIF`/`COUNTIF` understand `">10"`, `"<>"`, `"apple*"`, and escaping with `~*`.
@@ -192,7 +199,7 @@ follows Excel. The full list of eighteen divergences, with MS-OI29500 section re
 - Formula parsing is culture-independent: in xlsx the argument separator is always `,`, and the
   decimal separator is always `.`.
 
-## Supported functions (447)
+## Supported functions (468)
 
 Of the 356 functions in §18.17.7 ISO/IEC 29500, 352 are implemented — all except four tied to
 Japanese and Thai locales (`ASC`, `JIS`, `PHONETIC`, `BAHTTEXT`). Beyond the standard, modern
@@ -205,11 +212,13 @@ names and dynamic-array functions are accepted.
   FACTDOUBLE, COMBIN, PERMUT, MULTINOMIAL, SERIESSUM, GCD, LCM, SUMSQ, SUMX2MY2, SUMX2PY2,
   SUMXMY2.
 - **Matrix**: MMULT, MINVERSE, MDETERM.
-- **Logic**: IF, IFS, IFERROR, IFNA, AND, OR, XOR, NOT, TRUE, FALSE, SWITCH, LET.
-- **Text**: CONCAT, CONCATENATE, TEXTJOIN, LEN, LEFT, RIGHT, MID, TRIM, CLEAN, UPPER, LOWER,
-  PROPER, SUBSTITUTE, REPLACE, FIND, SEARCH, REPT, EXACT, CHAR, CODE, VALUE, T, TEXT, FIXED,
-  DOLLAR, USDOLLAR, ROMAN (all five forms), ARABIC. Byte doubles (`LEFTB` and kin) are synonyms
-  of character-wise functions: in single-byte text they match Excel too.
+- **Logic & Lambda**: IF, IFS, IFERROR, IFNA, AND, OR, XOR, NOT, TRUE, FALSE, SWITCH, LET, LAMBDA,
+  ISOMITTED, MAP, REDUCE, SCAN, MAKEARRAY, BYROW, BYCOL.
+- **Text**: CONCAT, CONCATENATE, TEXTJOIN, TEXTBEFORE, TEXTAFTER, TEXTSPLIT, LEN, LEFT, RIGHT,
+  MID, TRIM, CLEAN, UPPER, LOWER, PROPER, SUBSTITUTE, REPLACE, FIND, SEARCH, REPT, EXACT, CHAR,
+  CODE, VALUE, T, TEXT, FIXED, DOLLAR, USDOLLAR, ROMAN (all five forms), ARABIC. Byte doubles
+  (`LEFTB` and kin) are synonyms of character-wise functions: in single-byte text they match
+  Excel too.
 - **Date and time**: TODAY, NOW, DATE, TIME, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, WEEKDAY,
   WEEKNUM, EDATE, EOMONTH, DAYS, DAYS360, DATEDIF, DATEVALUE, TIMEVALUE, WORKDAY, NETWORKDAYS,
   WORKDAY.INTL, NETWORKDAYS.INTL, YEARFRAC (all five bases).
@@ -243,7 +252,8 @@ names and dynamic-array functions are accepted.
   periods), ACCRINTM, ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD.
 - **Database**: DSUM, DAVERAGE, DCOUNT, DCOUNTA, DMAX, DMIN, DPRODUCT, DGET, DSTDEV, DSTDEVP, DVAR,
   DVARP.
-- **Arrays**: SORT, SORTBY, FILTER, UNIQUE, SEQUENCE, RANDARRAY, TRANSPOSE, SINGLE (`@`).
+- **Arrays**: SORT, SORTBY, FILTER, UNIQUE, SEQUENCE, RANDARRAY, TRANSPOSE, SINGLE (`@`), VSTACK,
+  HSTACK, TOCOL, TOROW, TAKE, DROP, CHOOSEROWS, CHOOSECOLS, WRAPROWS, WRAPCOLS, EXPAND.
 - **Distributions**: NORM.DIST/INV, NORM.S.DIST/INV, LOGNORM.DIST/INV, T.DIST/.2T/.RT, T.INV/.2T,
   CHISQ.DIST/.RT, CHISQ.INV/.RT, F.DIST/.RT, F.INV/.RT, BETA.DIST/INV, GAMMA.DIST/INV, EXPON.DIST,
   WEIBULL.DIST, POISSON.DIST, BINOM.DIST, BINOM.INV, NEGBINOM.DIST, HYPGEOM.DIST, plus GAMMA,
@@ -257,10 +267,6 @@ names and dynamic-array functions are accepted.
 
 An unknown function yields `#NAME?`, not an exception, so a file with exotic functions still opens
 and recalculates everywhere else.
-
-Not in the list: `LAMBDA` and its companions (`MAP`, `REDUCE`, `SCAN`, `BYROW`, `BYCOL`) — they
-need function values in the executor — and 2022 text-splitting functions (`TEXTSPLIT`,
-`TEXTBEFORE`, `TEXTAFTER`, `VSTACK`, `HSTACK`, `TOCOL`, `TOROW`).
 
 ## Finance and database
 
@@ -349,7 +355,7 @@ Three things worth knowing if the engine is used on large workbooks:
   range reference (`=A1:A3`) still collapses by implicit intersection, not spill; in a workbook that
   arrived with its own metadata part, a new spill is written as a legacy array with a
   `DynamicArrayAsLegacy` warning — the writer does not renumber someone else's part.
-- No `LAMBDA` or R1C1 input.
+- No R1C1 input.
 - `TEXT` renders culture-independently, like all other parsing: separators and month names do not
   depend on the machine running the code, whereas Excel takes them from the file locale. Fraction
   formats (`# ?/?`, `?/???`, `# ??/16`) are supported: the space allotted to the denominator is the

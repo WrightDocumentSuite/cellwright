@@ -140,21 +140,21 @@ internal sealed class PtgDecoder(XlsGlobals globals, IReadOnlyList<string> sheet
             // getting the width wrong would misread every token after it rather than just this
             // one, so the version matters even where the answer is the same.
             case 0x18:
-            {
-                if (!IsBiff12)
                 {
-                    offset += 4;
-                    return false;
+                    if (!IsBiff12)
+                    {
+                        offset += 4;
+                        return false;
+                    }
+
+                    ReadOnlySpan<byte> reference = rgce.Slice(offset, Math.Min(13, rgce.Length - offset));
+                    offset += 13;
+                    if (StructuredReference(reference) is not { } text)
+                        return false;
+
+                    Push(text, Atomic);
+                    return true;
                 }
-
-                ReadOnlySpan<byte> reference = rgce.Slice(offset, Math.Min(13, rgce.Length - offset));
-                offset += 13;
-                if (StructuredReference(reference) is not { } text)
-                    return false;
-
-                Push(text, Atomic);
-                return true;
-            }
 
             case 0x19: // PtgAttr: control and display hints.
                 return ReadAttribute(rgce, ref offset);
@@ -196,54 +196,54 @@ internal sealed class PtgDecoder(XlsGlobals globals, IReadOnlyList<string> sheet
                 return true;
 
             case 0x01: // PtgFunc: a built-in function with a fixed number of arguments.
-            {
-                ushort index = BinaryPrimitives.ReadUInt16LittleEndian(rgce[offset..]);
-                offset += 2;
-                string? name = PtgFunctions.GetName(index);
-                if (name is null)
-                    return false;
+                {
+                    ushort index = BinaryPrimitives.ReadUInt16LittleEndian(rgce[offset..]);
+                    offset += 2;
+                    string? name = PtgFunctions.GetName(index);
+                    if (name is null)
+                        return false;
 
-                int arity = PtgFunctions.GetArgumentCount(index);
-                return PushCall(name, arity < 0 ? 0 : arity);
-            }
+                    int arity = PtgFunctions.GetArgumentCount(index);
+                    return PushCall(name, arity < 0 ? 0 : arity);
+                }
 
             case 0x02: // PtgFuncVar: the argument count is in the record.
-            {
-                byte count = rgce[offset];
-                ushort index = (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(rgce[(offset + 1)..]) & 0x7FFF);
-                offset += 3;
-                int arguments = count & 0x7F;
+                {
+                    byte count = rgce[offset];
+                    ushort index = (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(rgce[(offset + 1)..]) & 0x7FFF);
+                    offset += 3;
+                    int arguments = count & 0x7F;
 
-                // Index 255 marks a call to something outside the built-in table: the first
-                // argument is the name, pushed by the PtgName token before it.
-                if (index == 255)
-                    return PushUserCall(arguments);
+                    // Index 255 marks a call to something outside the built-in table: the first
+                    // argument is the name, pushed by the PtgName token before it.
+                    if (index == 255)
+                        return PushUserCall(arguments);
 
-                string? name = PtgFunctions.GetName(index);
-                return name is not null && PushCall(name, arguments);
-            }
+                    string? name = PtgFunctions.GetName(index);
+                    return name is not null && PushCall(name, arguments);
+                }
 
             case 0x03: // PtgName.
-            {
-                int nameIndex = BinaryPrimitives.ReadUInt16LittleEndian(rgce[offset..]);
-                offset += globals.Version >= BiffVersion.Biff8 ? 4 : 14;
-                Push(NameAt(nameIndex), Atomic);
-                return true;
-            }
+                {
+                    int nameIndex = BinaryPrimitives.ReadUInt16LittleEndian(rgce[offset..]);
+                    offset += globals.Version >= BiffVersion.Biff8 ? 4 : 14;
+                    Push(NameAt(nameIndex), Atomic);
+                    return true;
+                }
 
             case 0x04: // PtgRef.
-            {
-                CellRef reference = ReadRefBiff8(rgce, ref offset, anchor, out bool rowAbsolute, out bool columnAbsolute);
-                Push(FormatCell(reference, rowAbsolute, columnAbsolute), Atomic);
-                return true;
-            }
+                {
+                    CellRef reference = ReadRefBiff8(rgce, ref offset, anchor, out bool rowAbsolute, out bool columnAbsolute);
+                    Push(FormatCell(reference, rowAbsolute, columnAbsolute), Atomic);
+                    return true;
+                }
 
             case 0x05: // PtgArea.
-            {
-                string text = ReadAreaBiff8(rgce, ref offset, anchor);
-                Push(text, Atomic);
-                return true;
-            }
+                {
+                    string text = ReadAreaBiff8(rgce, ref offset, anchor);
+                    Push(text, Atomic);
+                    return true;
+                }
 
             case 0x06: // PtgMemArea: a cached union, whose parts follow as ordinary tokens.
                 offset += 6;
@@ -273,18 +273,18 @@ internal sealed class PtgDecoder(XlsGlobals globals, IReadOnlyList<string> sheet
                 return true;
 
             case 0x0C: // PtgRefN: relative to the cell, as inside a shared formula.
-            {
-                CellRef reference = ReadRefBiff8(rgce, ref offset, anchor, out bool rowAbsolute, out bool columnAbsolute, relative: true);
-                Push(FormatCell(reference, rowAbsolute, columnAbsolute), Atomic);
-                return true;
-            }
+                {
+                    CellRef reference = ReadRefBiff8(rgce, ref offset, anchor, out bool rowAbsolute, out bool columnAbsolute, relative: true);
+                    Push(FormatCell(reference, rowAbsolute, columnAbsolute), Atomic);
+                    return true;
+                }
 
             case 0x0D: // PtgAreaN.
-            {
-                string text = ReadAreaBiff8(rgce, ref offset, anchor, relative: true);
-                Push(text, Atomic);
-                return true;
-            }
+                {
+                    string text = ReadAreaBiff8(rgce, ref offset, anchor, relative: true);
+                    Push(text, Atomic);
+                    return true;
+                }
 
             case 0x0E: // PtgMemAreaN.
             case 0x0F: // PtgMemNoMemN.
@@ -292,32 +292,32 @@ internal sealed class PtgDecoder(XlsGlobals globals, IReadOnlyList<string> sheet
                 return true;
 
             case 0x19: // PtgNameX: a name borrowed from another workbook or from an add-in.
-            {
-                string? name = globals.Version >= BiffVersion.Biff8
-                    ? ExternalName(rgce, offset)
-                    : null;
-                offset += globals.Version >= BiffVersion.Biff8 ? 6 : 24;
-                Push(name ?? "#REF!", Atomic);
-                return true;
-            }
+                {
+                    string? name = globals.Version >= BiffVersion.Biff8
+                        ? ExternalName(rgce, offset)
+                        : null;
+                    offset += globals.Version >= BiffVersion.Biff8 ? 6 : 24;
+                    Push(name ?? "#REF!", Atomic);
+                    return true;
+                }
 
             case 0x1A: // PtgRef3d.
-            {
-                int externSheet = BinaryPrimitives.ReadUInt16LittleEndian(rgce[offset..]);
-                offset += 2;
-                CellRef reference = ReadRefBiff8(rgce, ref offset, anchor, out bool rowAbsolute, out bool columnAbsolute);
-                Push(SheetPrefix(externSheet) + FormatCell(reference, rowAbsolute, columnAbsolute), Atomic);
-                return true;
-            }
+                {
+                    int externSheet = BinaryPrimitives.ReadUInt16LittleEndian(rgce[offset..]);
+                    offset += 2;
+                    CellRef reference = ReadRefBiff8(rgce, ref offset, anchor, out bool rowAbsolute, out bool columnAbsolute);
+                    Push(SheetPrefix(externSheet) + FormatCell(reference, rowAbsolute, columnAbsolute), Atomic);
+                    return true;
+                }
 
             case 0x1B: // PtgArea3d.
-            {
-                int externSheet = BinaryPrimitives.ReadUInt16LittleEndian(rgce[offset..]);
-                offset += 2;
-                string area = ReadAreaBiff8(rgce, ref offset, anchor);
-                Push(SheetPrefix(externSheet) + area, Atomic);
-                return true;
-            }
+                {
+                    int externSheet = BinaryPrimitives.ReadUInt16LittleEndian(rgce[offset..]);
+                    offset += 2;
+                    string area = ReadAreaBiff8(rgce, ref offset, anchor);
+                    Push(SheetPrefix(externSheet) + area, Atomic);
+                    return true;
+                }
 
             case 0x1C: // PtgRefErr3d.
                 offset += IsBiff12 ? 8 : 6;

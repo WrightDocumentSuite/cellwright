@@ -143,6 +143,63 @@ public sealed class MappingRoundTripTests
         Assert.True(stream.Length > 0);
     }
 
+    [Fact]
+    public async Task NestedRow_WithEnumGuidTimeOnlyAndKeywordProperty_RoundTrips()
+    {
+        var id = Guid.Parse("d3b07384-d113-4e92-a219-8385cf0a7c01");
+        var source = new NestedRowContainer.ExtendedRow(
+            id,
+            OrderPriority.High,
+             null,
+            1.25f,
+            42,
+            7,
+            new TimeOnly(14, 15, 30),
+            new DateTimeOffset(2026, 8, 15, 9, 30, 0, TimeSpan.Zero),
+            "keyword-value");
+
+        using var stream = new MemoryStream();
+        await using (XlsxWriter writer = await XlsxWriter.CreateAsync(
+            stream, new XlsxWriterOptions { LeaveOpen = true }, TestContext.Current.CancellationToken))
+        {
+            XlsxSheetWriter sheet = await writer.BeginSheetAsync("Extended", cancellationToken: TestContext.Current.CancellationToken);
+            await sheet.WriteRowsAsync([source], TestContext.Current.CancellationToken);
+        }
+
+        stream.Position = 0;
+        await using XlsxReader reader = await XlsxReader.OpenAsync(
+            stream, new XlsxReaderOptions { LeaveOpen = true }, TestContext.Current.CancellationToken);
+
+        NestedRowContainer.ExtendedRow roundTripped = await Single(
+            reader.ReadRowsAsync<NestedRowContainer.ExtendedRow>("Extended", TestContext.Current.CancellationToken));
+        Assert.Equal(source, roundTripped);
+    }
+
+    [Fact]
+    public async Task CsvStreamingAndDomTable_RoundTripTypedRows()
+    {
+        using var stream = new MemoryStream();
+        CsvOptions options = CsvOptions.Default with { LeaveOpen = true };
+        await using (CsvWriter writer = CsvWriter.Create(stream, options))
+            await writer.WriteRowsAsync(SampleOrders, TestContext.Current.CancellationToken);
+
+        stream.Position = 0;
+        var fromCsv = new List<Order>();
+        await foreach (Order order in CsvReader.ReadRowsAsync(stream, options, TestContext.Current.CancellationToken)
+            .ReadRowsAsync<Order>(TestContext.Current.CancellationToken))
+        {
+            fromCsv.Add(order);
+        }
+
+        Assert.Equal(SampleOrders, fromCsv);
+
+        var book = Workbook.Create();
+        Worksheet sheet = book.Sheets.Add("Orders");
+        sheet.InsertTable(SampleOrders, "B2");
+        List<Order> fromDom = [.. sheet.ReadTable<Order>("B2")];
+        Assert.Equal(SampleOrders, fromDom);
+    }
+
     private static async Task<T> Single<T>(IAsyncEnumerable<T> source)
     {
         T? result = default;

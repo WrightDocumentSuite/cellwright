@@ -1,3 +1,5 @@
+using Cellwright.Tests.Shared;
+
 namespace Cellwright.Xls.Tests;
 
 /// <summary>
@@ -33,7 +35,7 @@ internal static class XlsbCorpus
 
         var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
         return [.. Directory.EnumerateFiles(root, pattern, options)
-            .Where(static path => !path.Contains("Cellwright", StringComparison.OrdinalIgnoreCase))
+            .Where(CorpusRoot.Includes)
             .OrderBy(static path => path, StringComparer.Ordinal)];
     }
 
@@ -45,6 +47,14 @@ internal static class XlsbCorpus
     /// </summary>
     private static (string Binary, string Twin)[] DiscoverTwins()
     {
+        string? root = FindCorpusRoot();
+        if (root is null)
+            return [];
+
+        // Generic fixture names such as "Simple" and "hyperlink" occur independently in
+        // several upstream repositories. Pairing them globally can compare unrelated books
+        // just because their base names happen to match, so the archive/repository directory
+        // is part of the identity.
         var candidates = new Dictionary<string, (string? Legacy, string? Package)>(StringComparer.OrdinalIgnoreCase);
         foreach (string path in Discover("*.xls").Concat(Discover("*.xlsx")).Concat(Discover("*.xlsm")))
         {
@@ -55,8 +65,9 @@ internal static class XlsbCorpus
                 continue;
 
             string name = Path.GetFileNameWithoutExtension(path);
-            candidates.TryGetValue(name, out (string? Legacy, string? Package) found);
-            candidates[name] = path.EndsWith(".xls", StringComparison.OrdinalIgnoreCase)
+            string key = CorpusKey(root, path, name);
+            candidates.TryGetValue(key, out (string? Legacy, string? Package) found);
+            candidates[key] = path.EndsWith(".xls", StringComparison.OrdinalIgnoreCase)
                 ? (found.Legacy ?? path, found.Package)
                 : (found.Legacy, found.Package ?? path);
         }
@@ -64,7 +75,11 @@ internal static class XlsbCorpus
         var pairs = new List<(string, string)>();
         foreach (string binary in AllFiles.Value)
         {
-            if (candidates.TryGetValue(Path.GetFileNameWithoutExtension(binary), out (string? Legacy, string? Package) twin) &&
+            if (IsKnownDifferentFixture(root, binary))
+                continue;
+
+            string key = CorpusKey(root, binary, Path.GetFileNameWithoutExtension(binary));
+            if (candidates.TryGetValue(key, out (string? Legacy, string? Package) twin) &&
                 (twin.Legacy ?? twin.Package) is { } chosen)
             {
                 pairs.Add((binary, chosen));
@@ -74,16 +89,29 @@ internal static class XlsbCorpus
         return [.. pairs];
     }
 
+    private static string CorpusKey(string root, string path, string name)
+    {
+        return string.Concat(CorpusSource(root, path), "\0", name);
+    }
+
+    private static string CorpusSource(string root, string path)
+    {
+        ReadOnlySpan<char> relative = Path.GetRelativePath(root, path);
+        int separator = relative.IndexOfAny(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return separator < 0 ? "." : relative[..separator].ToString();
+    }
+
+    private static bool IsKnownDifferentFixture(string root, string binary)
+    {
+        // NPOI's comments.xlsb has an A2 comment which its comments.xls and comments.xlsx do
+        // not contain. The raw files therefore are not two encodings of the same workbook and
+        // cannot witness either reader, even though their base names match.
+        return Path.GetFileNameWithoutExtension(binary).Equals("comments", StringComparison.OrdinalIgnoreCase) &&
+               CorpusSource(root, binary).StartsWith("npoi-", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string? FindCorpusRoot()
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (Directory.Exists(Path.Combine(directory.FullName, "ExcelDataReader-3.9.0")))
-                return directory.FullName;
-            directory = directory.Parent;
-        }
-
-        return null;
+        return CorpusRoot.Find("ExcelDataReader-3.9.0");
     }
 }

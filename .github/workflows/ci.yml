@@ -7,10 +7,15 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  # Never let a developer-built package from the runner's global cache satisfy restore.
+  NUGET_PACKAGES: ${{ github.workspace }}/artifacts/nuget-cache
 
 jobs:
   build:
@@ -31,18 +36,17 @@ jobs:
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
-          path: ~/.nuget/packages
-          key: nuget-${{ matrix.os }}-${{ hashFiles('Directory.Packages.props') }}
-          restore-keys: nuget-${{ matrix.os }}-
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-v2-${{ runner.os }}-${{ hashFiles('global.json', 'NuGet.Config', 'nuget.config', 'Directory.Build.props', 'Directory.Packages.props', '**/*.csproj', '**/*.props', '**/*.targets', '**/packages.lock.json') }}
 
-      - run: dotnet restore Cellwright.slnx
+      - run: dotnet restore Cellwright.slnx --locked-mode
 
       # Warnings are errors in Directory.Build.props, so a clean build is part of the contract.
       - run: dotnet build Cellwright.slnx -c Release --no-restore
 
-      # The corpus of real workbooks lives in sibling repositories that are not checked in;
-      # the tests that need it skip themselves, and the rest still cover every unit.
-      - run: dotnet test Cellwright.slnx -c Release --no-build --verbosity normal
+      # Pull requests use the fast repository fixtures. The separately pinned upstream corpus
+      # is exercised by Corpus integration, where the TRX gate rejects unexpected skips.
+      - run: dotnet test Cellwright.slnx -c Release --no-build --no-restore --verbosity normal
 
       # Again under a culture whose decimal separator is a comma. A spreadsheet is written the
       # same way wherever it is produced, and one parse that forgets to say so makes a file
@@ -51,16 +55,20 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         env:
           CELLWRIGHT_TEST_CULTURE: ru-RU
-        run: dotnet test Cellwright.slnx -c Release --no-build --verbosity normal
+        run: dotnet test Cellwright.slnx -c Release --no-build --no-restore --verbosity normal
 
-      - name: Pack
+      - name: Verify packages
+        id: packages
         if: matrix.os == 'ubuntu-latest'
-        run: dotnet pack Cellwright.slnx -c Release --no-build -o artifacts/packages
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File ./eng/verify-packages.ps1 -RuntimeIdentifier linux-x64
 
       - name: Upload packages
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: nupkg
-          path: artifacts/packages/*.nupkg
+          name: cellwright-packages
+          path: |
+            ${{ steps.packages.outputs.package-directory }}/*.nupkg
+            ${{ steps.packages.outputs.package-directory }}/*.snupkg
           if-no-files-found: error

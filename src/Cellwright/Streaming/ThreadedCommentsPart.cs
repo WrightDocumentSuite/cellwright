@@ -24,10 +24,10 @@ namespace Cellwright.Streaming;
 internal static class ThreadedCommentsPart
 {
     /// <summary>Namespace of the threaded comment elements.</summary>
-    private const string _namespace = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments";
+    private const string Namespace = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments";
 
     /// <summary>How the placeholder note names the thread it stands for.</summary>
-    private const string _placeholderPrefix = "tc=";
+    private const string PlaceholderPrefix = "tc=";
 
     /// <summary>
     /// Extracts the threaded root identifier from the mandatory <c>tc={uid}</c> author token.
@@ -36,10 +36,10 @@ internal static class ThreadedCommentsPart
     public static bool TryGetPlaceholderId(CellComment note, out string id)
     {
         id = string.Empty;
-        if (note.Author is not { } author || !author.StartsWith(_placeholderPrefix, StringComparison.Ordinal))
+        if (note.Author is not { } author || !author.StartsWith(PlaceholderPrefix, StringComparison.Ordinal))
             return false;
 
-        string token = author[_placeholderPrefix.Length..];
+        string token = author[PlaceholderPrefix.Length..];
         if (!Guid.TryParse(token, out _))
             return false;
 
@@ -63,7 +63,7 @@ internal static class ThreadedCommentsPart
             if (xml.NodeType != XmlNodeType.Element)
                 continue;
 
-            if (xml.LocalName == "person" && xml.NamespaceURI == _namespace)
+            if (xml.LocalName == "person" && xml.NamespaceURI == Namespace)
             {
                 bool empty = xml.IsEmptyElement;
                 if (ReadPerson(xml) is { } person)
@@ -213,7 +213,7 @@ internal static class ThreadedCommentsPart
     {
         xml.WriteDeclaration();
         xml.WriteRaw("<personList xmlns=\""u8);
-        xml.WriteRaw(System.Text.Encoding.UTF8.GetBytes(_namespace));
+        xml.WriteRaw(System.Text.Encoding.UTF8.GetBytes(Namespace));
         xml.WriteRaw("\" xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"u8);
 
         foreach (Person person in people)
@@ -255,7 +255,7 @@ internal static class ThreadedCommentsPart
     {
         xml.WriteDeclaration();
         xml.WriteRaw("<ThreadedComments xmlns=\""u8);
-        xml.WriteRaw(System.Text.Encoding.UTF8.GetBytes(_namespace));
+        xml.WriteRaw(System.Text.Encoding.UTF8.GetBytes(Namespace));
         xml.WriteRaw("\" xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"u8);
 
         foreach (ThreadedComment comment in comments)
@@ -317,7 +317,7 @@ internal static class ThreadedCommentsPart
             {
                 Cell = comment.Cell,
                 Text = author.Length > 0 ? $"Comment:\n    {comment.Text}" : comment.Text,
-                Author = _placeholderPrefix + comment.Id,
+                Author = PlaceholderPrefix + comment.Id,
                 RevisionUid = comment.Id,
             });
         }

@@ -20,9 +20,9 @@ formula engine.
   them and retargeting the whole workbook's formulas; reordering and copying sheets.
 - **Document properties**: `Title`, `Author`, `Company`, dates and custom fields — what Excel
   shows on its Info tab, which a workbook built from scratch used not to carry at all.
-- **Lossless editing of foreign files**: pivot tables, themes and `.xlsm` macros travel into the
-  saved file as they were; renaming a sheet takes the formulas, defined names and chart
-  references with it.
+- **Preservation-oriented editing of foreign files**: pivot tables, themes and `.xlsm` macros
+  travel into the saved file as they were while their owning structures stay intact; operations
+  that must rebuild a sheet or drawing report opaque content they cannot safely reproduce.
 - **Styles**: immutable records with free interning; fluent builders on C# 14 extension members:
   `CellStyle.Default.Bold().Fill(0xFF2278D4).NumberFormat("#,##0.00")`. All of §18.8 is covered:
   pattern and gradient fills, diagonals, text rotation, theme colours, cell protection, whole-row
@@ -34,12 +34,13 @@ formula engine.
   date conversion (the 1900 bug, the 1904 system).
 - **Typed mapping** (`Cellwright.Mapping`): `[ExcelRow]` + an incremental source generator →
   `IRowSchema<T>` (static abstract members), zero reflection, Native AOT.
-- **Formula engine** (`Cellwright.Formulas`): 447 functions — 352 of the 356 in §18.17.7 of
+- **Formula engine** (`Cellwright.Formulas`): 468 functions — 352 of the 356 in §18.17.7 of
   ISO/IEC 29500 (all but four Japanese and Thai ones), including securities, engineering, complex
   numbers, Bessel, correlation and hypothesis tests — with incremental recalculation over a
   dependency graph, cycle detection, shared-formula expansion, defined names, structured
   references `Table[Column]`, 3-D ranges `Q1:Q4!A1`, references into closed workbooks from the
-  `externalLink` cache, `LET` and `TEXT`.
+  `externalLink` cache, `LET`, `LAMBDA` (`MAP`, `REDUCE`, `SCAN`, `MAKEARRAY`, `BYROW`, `BYCOL`,
+  `ISOMITTED`) and `TEXT`.
 - **Dynamic array spill**: a formula returning an array occupies its rectangle, `A1#` references
   the whole of it, and anything in the way makes it `#SPILL!` rather than a partial answer.
 - **Charts**: embedded charts are read (kind, title, series with their references and cached
@@ -149,7 +150,9 @@ CellValue total = book.Evaluate("SUM(Report!D2:D9)");
 sheet.InsertRows(2, 3);
 sheet.DeleteColumns(5);
 sheet.Name = "Q1 2026";                       // formulas, names and chart references follow the sheet
-book.Sheets.Copy("Q1 2026", "Q2 2026");       // a full copy, placed right after the original
+SheetCopyResult copy = book.Sheets.Copy("Q1 2026", "Q2 2026", new SheetCopyOptions());
+// Modelled content, pictures, charts and self-references are copied; inspect copy.Warnings
+// if the source also contained opaque worksheet markup or unsupported drawing objects.
 book.Sheets.Move("Summary", 0);
 
 book.Properties.Title = "Quarterly report";   // the Info tab in Excel
@@ -230,9 +233,9 @@ dotnet run -c Release --project benchmarks/Cellwright.Benchmarks -- --filter * -
 dotnet run --project samples/Cellwright.Samples
 ```
 
-CI builds and runs the tests on Linux and Windows for every push and pull request
-(`.github/workflows/ci.yml`). The corpus of real workbooks lives in sibling repositories that are
-not in git — the tests that depend on it skip themselves there.
+CI builds and runs the fast fixture suite on Linux and Windows for every push and pull request
+(`.github/workflows/ci.yml`). A scheduled integration job downloads public workbook corpora pinned
+by commit and SHA-256, then rejects incomplete runs and unexpected skips from the TRX results.
 
 ## Layout
 
@@ -244,17 +247,14 @@ src/Cellwright.Xls                binary formats: CFB, BIFF8 (.xls), BIFF12 (.xl
                                   decryption, VBA extraction
 src/Cellwright.Mapping            mapping attributes + runtime
 src/Cellwright.Mapping.Generator  Roslyn incremental generator (packed into Mapping)
-tests/                            xUnit: 1835 tests (run twice, the second time under a culture
+tests/                            xUnit suite (run twice, the second time under a culture
                                   with a comma for the decimal separator), including the OpenXml
-                                  validator, interop with ClosedXML, a round trip of ~400 real xlsx
-                                  and xlsm files with no part lost, 844 real .xls and 66 .xlsb with
-                                  values, hyperlinks, document properties, pictures and theme
-                                  colours checked against ExcelDataReader and NPOI, a comparison of
-                                  64 workbooks the corpus holds in two formats at once, formula
-                                  recalculation across three formats against Excel's own values,
-                                  Excel's documented divergences from the standard per MS-OI29500,
-                                  and 595 VBA modules with 301 library references from 114 macro
-                                  workbooks
+                                  validator, interop with ClosedXML, and a pinned public corpus of
+                                  856 .xls, 73 .xlsb, 1,080 .xlsx and 32 .xlsm files. It checks
+                                  package fidelity, values, links, properties, pictures and themes
+                                  against ExcelDataReader/NPOI, cross-format twins, formula
+                                  recalculation against cached Excel values, MS-OI29500
+                                  divergences, and VBA module/reference extraction
 benchmarks/                       BenchmarkDotNet vs EPPlus 8 / ClosedXML / ExcelDataReader
 samples/                          working examples of every layer
 ```
@@ -263,9 +263,11 @@ The untrusted-input contract is in
 [loading-untrusted-input.md](docs/loading-untrusted-input.md). The deliberate limitations are listed in [architecture.md](docs/architecture.md),
 [worksheet.md](docs/worksheet.md), [formulas.md](docs/formulas.md), [xls.md](docs/xls.md),
 [xlsb.md](docs/xlsb.md), [pictures.md](docs/pictures.md), [markdown.md](docs/markdown.md) and
-[vba.md](docs/vba.md). In short: a loaded chart can be read and replaced but not edited, and pivot
-tables have no API at all — both travel into the saved xlsx untouched; there is no `LAMBDA` and no
-R1C1 input; an external workbook is computed from its link cache rather than by opening the file;
+[vba.md](docs/vba.md). In short: charts can be read, created (`Column`, `Bar`, `Line`, `Pie`,
+`Doughnut`, `Area`, `Scatter`, `Bubble`, `Radar`, and combined Cartesian series) and updated via
+`SetTitle`/`SetData`/`RefreshCache`, while untouched loaded charts and pivot tables (which have no
+API) travel into the saved xlsx untouched; there is no R1C1 input;
+an external workbook is computed from its link cache rather than by opening the file;
 macros are read but never written; package encryption is written but `.xls` encryption is not;
 `.xlsb` is read but not written; binary `.xls` does not preserve the parts it cannot model, and
 writes the conditional formatting rules the classic records can express but not the kinds that

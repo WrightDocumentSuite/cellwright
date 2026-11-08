@@ -19,6 +19,7 @@ internal sealed class GlobalsParser(
     private readonly List<XlsFontRecord> _fonts = [];
     private readonly Dictionary<int, string> _formats = [];
     private readonly List<uint> _palette = [];
+    private (int CharPos, int FontIndex)[]?[]? _sstRuns;
 
     /// <summary>
     /// The workbook's image store, in pieces. A drawing group larger than one record does not
@@ -128,6 +129,9 @@ internal sealed class GlobalsParser(
         if (_drawingGroup.Count > 0)
             globals.Blips.AddRange(EscherPictures.ReadStore(EscherPictures.Join(_drawingGroup), loadBudget));
 
+        foreach (XlsFontRecord font in _fonts)
+            globals.Fonts.Add(BuildFontStyle(font));
+
         foreach (XlsXfRecord xf in rawFormats)
         {
             string numberFormat = ResolveFormatCode(xf.FormatIndex);
@@ -135,7 +139,34 @@ internal sealed class GlobalsParser(
             globals.CellFormats.Add(new StyleId(stylePool.Intern(style)));
             globals.TemporalKinds.Add(NumberFormatClassifier.Classify(xf.FormatIndex, numberFormat.Length == 0 ? null : numberFormat));
         }
+
+        if (_sstRuns is not null && globals.SharedStrings.Length > 0)
+        {
+            var richStrings = new RichText?[globals.SharedStrings.Length];
+            int count = Math.Min(globals.SharedStrings.Length, _sstRuns.Length);
+            for (int i = 0; i < count; i++)
+            {
+                if (_sstRuns[i] is { Length: > 0 } runs)
+                    richStrings[i] = globals.BuildRichText(globals.SharedStrings[i], runs);
+            }
+
+            globals.SharedRichStrings = richStrings;
+        }
     }
+
+    private FontStyle BuildFontStyle(in XlsFontRecord font) => new()
+    {
+        Name = font.Name,
+        Size = font.Size,
+        Bold = font.Bold,
+        Italic = font.Italic,
+        Underline = font.Underline,
+        Strikethrough = font.Strikethrough,
+        VerticalAlign = font.VerticalAlign,
+        Color = ResolveColor(font.ColorIndex),
+        Charset = font.Charset,
+        Family = font.Family,
+    };
 
     private string ResolveFormatCode(int formatIndex)
     {
@@ -148,23 +179,12 @@ internal sealed class GlobalsParser(
 
     private CellStyle BuildStyle(in XlsXfRecord xf, string numberFormat)
     {
-        XlsFontRecord font = (uint)xf.FontIndex < (uint)_fonts.Count ? _fonts[xf.FontIndex] : XlsFontRecord.Default;
+        int fontSlot = xf.FontIndex > 4 ? xf.FontIndex - 1 : xf.FontIndex;
+        XlsFontRecord font = (uint)fontSlot < (uint)_fonts.Count ? _fonts[fontSlot] : XlsFontRecord.Default;
         return new CellStyle
         {
             NumberFormat = numberFormat,
-            Font = new FontStyle
-            {
-                Name = font.Name,
-                Size = font.Size,
-                Bold = font.Bold,
-                Italic = font.Italic,
-                Underline = font.Underline,
-                Strikethrough = font.Strikethrough,
-                VerticalAlign = font.VerticalAlign,
-                Color = ResolveColor(font.ColorIndex),
-                Charset = font.Charset,
-                Family = font.Family,
-            },
+            Font = BuildFontStyle(font),
             Fill = xf.FillPattern == FillPattern.None
                 ? FillStyle.None
                 : FillStyle.Patterned(xf.FillPattern, ResolveColor(xf.ForegroundColorIndex), ResolveColor(xf.BackgroundColorIndex)),
@@ -268,14 +288,18 @@ internal sealed class GlobalsParser(
 
         loadBudget?.AddSharedStrings(unique);
         var strings = new string[unique];
+        var sstRuns = new (int CharPos, int FontIndex)[]?[unique];
         var cursor = new BiffStrings.SstCursor(body, reader.ContinuationSizes, offset: 8, loadBudget);
         int read = 0;
         while (read < unique && cursor.HasMore)
         {
-            string text = cursor.ReadNext();
+            string text = cursor.ReadNext(out (int CharPos, int FontIndex)[]? runs);
             loadBudget?.AddCellText(text);
+            sstRuns[read] = runs;
             strings[read++] = text;
         }
+
+        _sstRuns = sstRuns;
 
         if (read == unique)
             return strings;

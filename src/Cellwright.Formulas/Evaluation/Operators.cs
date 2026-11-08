@@ -50,6 +50,7 @@ internal static class Operators
     {
         FormulaValueKind.Scalar => value.AsScalar,
         FormulaValueKind.Reference => RangeReader.Intersect(value.AsReference, context),
+        FormulaValueKind.Lambda => CellValue.Error(ExcelError.Calc),
         _ => value.AsArray.Count > 0 ? value.AsArray.Values[0] : CellValue.Error(ExcelError.Value),
     };
 

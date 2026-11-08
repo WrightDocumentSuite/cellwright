@@ -19,6 +19,7 @@ public sealed class XlsxWriter : IAsyncDisposable
     private readonly HashSet<string> _replacedWorkbookRelationshipTypes = new(StringComparer.Ordinal);
     private readonly HashSet<string> _usedPartPaths = new(OpcNames.Instance);
     private readonly HashSet<string> _releasedPreservedPartPaths = new(OpcNames.Instance);
+    private readonly HashSet<string> _retainedPreservedPartPaths = new(OpcNames.Instance);
     private readonly List<SheetEntry> _sheetEntries = [];
     private readonly List<DefinedNameEntry> _definedNames = [];
     private readonly string _workbookPartPath;
@@ -243,6 +244,33 @@ public sealed class XlsxWriter : IAsyncDisposable
             _package.AddRelationship(partPath, relationship);
     }
 
+    /// <summary>
+    /// Clones a loaded part's relationship set onto a newly allocated part. The raw chart XML
+    /// keeps its relationship ids, while internal targets are rebased from the source path to
+    /// the new one and retained even if the source sheet is later removed.
+    /// </summary>
+    internal void ClonePreservedRelationships(string sourcePartPath, string targetPartPath)
+    {
+        if (_preserved is null)
+            return;
+
+        foreach (OpcRelationship relationship in _preserved.RelationshipsOf(sourcePartPath))
+        {
+            if (relationship.IsExternal)
+            {
+                _package.AddRelationship(targetPartPath, relationship);
+                continue;
+            }
+
+            string absoluteTarget = OpcPath.Resolve(sourcePartPath, relationship.Target);
+            _retainedPreservedPartPaths.Add(absoluteTarget);
+            _package.AddRelationship(targetPartPath, relationship with
+            {
+                Target = OpcPath.MakeRelative(targetPartPath, absoluteTarget),
+            });
+        }
+    }
+
     /// <summary>Returns a part path of the given shape that no other part in the package occupies.</summary>
     /// <summary>
     /// Registers a part of the workbook itself, replacing whatever the loaded file had under the
@@ -399,11 +427,20 @@ public sealed class XlsxWriter : IAsyncDisposable
         if (_preserved is null)
             return;
 
-        var roots = new List<string>(_sheetEntries.Count + 2) { "/", _workbookPartPath };
+        var roots = new List<string>(_sheetEntries.Count + _retainedPreservedPartPaths.Count + 2)
+        {
+            "/",
+            _workbookPartPath,
+        };
         foreach (SheetEntry sheet in _sheetEntries)
             roots.Add(sheet.PartPath);
+        roots.AddRange(_retainedPreservedPartPaths);
 
         HashSet<string> reachable = _preserved.Reachable(roots);
+        // Reachable follows outgoing edges but deliberately does not include the roots
+        // themselves because ordinary roots are generated. Retained chart dependencies are raw
+        // parts and therefore need to be included explicitly as well as traversed.
+        reachable.UnionWith(_retainedPreservedPartPaths);
         foreach ((string partPath, byte[] content) in _preserved.Parts)
         {
             if (_releasedPreservedPartPaths.Contains(partPath))

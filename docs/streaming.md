@@ -73,3 +73,33 @@ Rules:
 - Recoverable problems do not throw: subscribe to `XlsxReaderOptions.OnWarning` — codes like
   `BadNumber`, `BadSharedStringIndex` will arrive.
 - The reader is not thread-safe; enumerate sheets sequentially.
+
+## CSV and TSV Streaming & DOM Import/Export
+
+`CsvReader` and `CsvWriter` provide true incremental RFC 4180 CSV and TSV (`CsvOptions.TabSeparated`,
+`CsvOptions.SemicolonSeparated`) streaming over an 8 KiB chunk buffer (`O(row width)` memory) with
+reusable `RowData` buffers (compatible with `[ExcelRow]` source-generated mappers), `TimeSpan`
+duration inference (`[h]:mm:ss` / `hh:mm:ss`), and `DocumentLoadBudget` enforcement (`MaxInputBytes`,
+`MaxCells`, `MaxCellTextCharacters`, `MaxTotalCellTextCharacters`), alongside convenience helpers
+on `Workbook` and `Worksheet`:
+
+```csharp
+// Streaming CSV/TSV rows (constant buffer, works with [ExcelRow] T.ReadFrom(in row)):
+await foreach (RowData row in CsvReader.ReadRowsAsync("data.tsv", CsvOptions.TabSeparated))
+{
+    string region = row.GetValueOrBlank(0).GetText();
+    double amount = row.GetValueOrBlank(1).GetNumber();
+}
+
+// Streaming CSV/TSV writer:
+await using (CsvWriter writer = CsvWriter.Create("out.csv"))
+{
+    await writer.WriteRowAsync(new[] { CellValue.Text("Region"), CellValue.Text("Amount") });
+    await writer.WriteRowAsync(new[] { CellValue.Text("North"), CellValue.Number(1250.5) });
+}
+
+// DOM convenience helpers on Workbook and Worksheet:
+Workbook workbook = await Workbook.LoadCsvAsync("input.csv");
+string csvText = workbook.Sheets[0].ToCsv();
+await workbook.Sheets[0].SaveCsvAsync("output.csv");
+```

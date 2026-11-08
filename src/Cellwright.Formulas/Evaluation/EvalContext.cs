@@ -68,6 +68,9 @@ internal sealed class EvalContext
     /// <summary>How deep defined-name resolution currently is; bounded to stop name cycles.</summary>
     public int NameDepth { get; set; }
 
+    /// <summary>How deep <c>LAMBDA</c> invocation currently is; bounded to stop infinite recursion.</summary>
+    public int LambdaDepth { get; set; }
+
     /// <summary>
     /// Compiles the formula of a defined name, reusing earlier results. This cache is naturally
     /// bounded by the workbook's finite names collection.
@@ -140,6 +143,29 @@ internal sealed class EvalContext
         finally
         {
             _spareEvaluators.Push(evaluator);
+        }
+    }
+
+    internal FormulaValue InvokeLambda(LambdaValue lambda, ReadOnlySpan<FormulaValue> args)
+    {
+        const int MaxLambdaDepth = 64;
+        if (LambdaDepth >= MaxLambdaDepth)
+            return FormulaValue.Error(ExcelError.Number);
+
+        int[] slots = lambda.Definition.ParameterSlots;
+        if (args.Length > slots.Length || (args.Length == 0 && slots.Length > 0))
+            return FormulaValue.Error(ExcelError.Value);
+
+        LambdaDepth++;
+        Evaluator evaluator = _spareEvaluators.Count > 0 ? _spareEvaluators.Pop() : new Evaluator();
+        try
+        {
+            return evaluator.EvaluateLambda(lambda, args, this);
+        }
+        finally
+        {
+            _spareEvaluators.Push(evaluator);
+            LambdaDepth--;
         }
     }
 

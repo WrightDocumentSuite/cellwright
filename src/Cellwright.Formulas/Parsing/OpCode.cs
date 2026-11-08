@@ -79,6 +79,15 @@ internal enum OpCode : byte
     /// but rendering needs it to know how many bindings to put back in front.
     /// </summary>
     Let,
+
+    /// <summary>Pushes a <c>LAMBDA</c> closure from the lambda pool and jumps past its body.</summary>
+    PushLambda,
+
+    /// <summary>Marks the end of a <c>LAMBDA</c> body for formula rendering.</summary>
+    EndLambda,
+
+    /// <summary>Invokes a <c>LAMBDA</c> closure on the stack with <c>ArgCount</c> arguments.</summary>
+    Invoke,
 }
 
 /// <summary>

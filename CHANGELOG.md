@@ -6,6 +6,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 While the major version is zero, breaking changes may land in minor releases: the public surface
 is not frozen yet.
 
+## [Unreleased]
+
+## [0.1.4] - 2026-11-08
+
+### Added
+
+- Package verification now compares every library with the published 0.1.3 API baseline, checks
+  exact nuspec dependency ranges, analyzer and SourceLink assets, and installs the resulting
+  packages into a trimmed Native AOT consumer.
+- Scheduled integration CI downloads workbook corpora at pinned commits with verified SHA-256
+  archives and rejects incomplete or unexpectedly skipped test runs. A separate security workflow
+  audits the complete dependency graph and fuzzes OOXML, CFB/BIFF, XLSB and encryption entry paths.
+- Sheet copying has an opt-in diagnostic result (`SheetCopyResult`) and policy
+  (`SheetCopyOptions`). It clones modelled pictures and charts, preserves loaded chart relationship
+  graphs, and retargets explicit self-references by default.
+- `LAMBDA` closures and higher-order functions (`MAP`, `REDUCE`, `SCAN`, `MAKEARRAY`, `BYROW`,
+  `BYCOL`, `ISOMITTED`) in `Cellwright.Formulas`, including defined-name lambdas, direct invocation,
+  and automatic `_xlfn.` / `_xlpm.` prefix handling.
+- Rich text (`Cell.RichText` / `RichTextRun`) reading and writing in legacy `.xls` (BIFF8 `SST` and
+  `RString`) and reading in binary `.xlsb` (`BrtSSTItem` and `BrtCellRString`).
+- True incremental chunked streaming in `CsvReader` (`O(row width)` memory), `TimeSpan` duration
+  inference, `DocumentLoadBudget` enforcement on CSV inputs, and `Cellwright.Mapping` extensions
+  for `CsvReader`, `CsvWriter`, and `Worksheet.ReadTable<TRow>`.
+- PDF chart rendering for `Radar` (polygonal spider-web grid and radial spokes) and `Scatter`
+  (numeric X-Y coordinate mapping and point markers) in `Cellwright.Pdf`.
+
+### Changed
+
+- PDF export now consumes the matching Inkwright 0.1.4 release through exact package ranges.
+- Pin SDK 10.0.403 exactly and refresh SDK-owned linker dependencies in the committed lock files;
+  servicing SDK selection must not silently change a locked restore.
+- Restore is locked for every project and CI uses a repository-local NuGet cache keyed by the SDK,
+  central build files, projects and every lock file. Local package builds receive unique prerelease
+  versions; stable package creation is available only through the release verifier.
+- Cellwright and Inkwright dependencies are emitted as exact NuGet ranges. The SDK is fixed at
+  10.0.403 so implicit build-tool dependencies are reproducible as well.
+- The Mapping source generator no longer inherits application Native AOT, trimming, single-file or
+  runtime properties when consumed through a project reference.
+- The test-only NPOI oracle was updated to 2.7.6, its vulnerable XML dependency is overridden by
+  `System.Security.Cryptography.Xml` 10.0.13, and broad NuGet vulnerability suppressions were
+  removed.
+
+### Fixed
+
+- `AutoFitRows` can now opt into measuring merged cells at their combined visible width, including
+  merges that span several rows, through `AutoFitOptions.IncludeMergedCells`.
+- Copying a worksheet no longer shares mutable picture/chart anchors or silently points explicit
+  formulas, validation rules, conditional formats, hyperlinks and chart series back to the source
+  sheet. Unsupported opaque content is now reported as `SheetCopyContentNotCopied`.
+
 ## [0.1.3] — 2026-08-10
 
 ### Added
@@ -179,6 +229,8 @@ silence. The main ones as of this release:
 
 The full lists are in [docs/](docs/).
 
+[Unreleased]: https://github.com/WrightDocumentSuite/cellwright/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.4
 [0.1.3]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.3
 [0.1.2]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.2
 [0.1.1]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.1

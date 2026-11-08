@@ -202,6 +202,15 @@ internal sealed class LinkItem : PageItem
     /// <summary>Where the link goes, for a link out of the document.</summary>
     public string? Url { get; init; }
 
+    /// <summary>The target worksheet for an internal workbook link.</summary>
+    public Worksheet? TargetSheet { get; init; }
+
+    /// <summary>The target cell for an internal workbook link.</summary>
+    public CellRef? TargetCell { get; init; }
+
+    /// <summary>The resolved 0-based page index in the output PDF for an internal link.</summary>
+    public int? DestinationPageIndex { get; set; }
+
     /// <summary>How wide the area is.</summary>
     public required double Width { get; init; }
 

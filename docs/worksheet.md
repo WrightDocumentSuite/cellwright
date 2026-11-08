@@ -62,8 +62,9 @@ insert in that case; here the overflow simply disappears.
 What is lost: saved worksheet markup with coordinates the model does not represent — sort state
 (`sortState`), custom views, and “ignore error” flags (`ignoredErrors`). They are dropped rather
 than left pointing at the wrong place; a warning arrives in `Workbook.OnWarning` with code
-`StructuralEditDroppedMarkup`. Picture and chart anchors live in their own part and stay at their
-old coordinates.
+`StructuralEditDroppedMarkup`. Pictures and charts move with their anchored cells (`TwoCell` and
+`OneCell` anchors unless `MoveBehavior` is `Fixed`), and chart series references (`c:f`) are
+retargeted across the workbook.
 
 ## Worksheet appearance
 
@@ -207,7 +208,8 @@ sheet.Tables.Add(new ExcelTable
 Column names come from the header row; empty header cells become `Column2`, `Column3`, and so on,
 as in Excel. Table filter state and calculated-column formulas are not modeled: an untouched table
 keeps them in its part; any change to the sheet’s table list regenerates parts from the model.
-Structural references `Table[Column]` are not yet understood by the formula engine.
+Structured references (`Table[Column]`, `Table[[#Headers],[Column]]`, `Table[[#Totals],[Column]]`,
+`Table[@Column]`) are evaluated by `Cellwright.Formulas`.
 
 ## Data validation
 
@@ -251,9 +253,8 @@ foreach (Chart chart in sheet.Charts)
     Console.WriteLine($"{chart.Kind} '{chart.Title}': {chart.Series.Count} series");
 ```
 
-`ChartKind` names what the series are plotted as. Six kinds can be created — `Column`, `Bar`,
-`Line`, `Pie`, `Doughnut`, `Area`; `Scatter` and `Radar` are read but asking for one throws,
-because the writer would have to invent markup it has never verified against Excel.
+`ChartKind` names what the series are plotted as. All eight modelled kinds can be created —
+`Column`, `Bar`, `Line`, `Pie`, `Doughnut`, `Area`, `Scatter`, and `Radar`.
 
 A series carries both its references (`ValuesReference`, `CategoriesReference`) and the values
 the file cached for them (`Values`, `Categories`). Both are kept on purpose: the references are
@@ -265,12 +266,13 @@ never recalculates still has something honest to draw, which is what
 The anchor names the cells the chart covers. `"D2:K17"` means exactly that rectangle; the frame
 stored in the file reaches one cell further, because a drawing anchor's far corner is exclusive.
 
-**What cannot be done.** A loaded chart cannot be edited — only read, removed, and recreated. Its
-raw `chartSpace` is the source of truth and is written back byte for byte, which is what keeps
-axis styling, layout and everything else §21.2 can say that this model does not name. Adding or
-removing any chart regenerates the sheet's drawing, and then only what the model holds — pictures
-and charts — is written back; foreign shapes and text boxes that shared the drawing are lost and
-reported as `DrawingShapesNotWritten`.
+**Mutating charts.** An untouched loaded chart writes its raw `chartSpace` back byte for byte. You
+can also update a chart's title, series, or cached values via `chart.SetTitle(title)`,
+`chart.SetData(...)`, or `chart.RefreshCache()`; structural row/column insertions and deletions
+(`InsertRows`, `DeleteRows`, `InsertColumns`, `DeleteColumns`) automatically shift both the chart's
+anchor and its series references (`c:f`). Adding or removing any chart regenerates the sheet's
+drawing, and then only what the model holds — pictures and charts — is written back; foreign shapes
+and text boxes that shared the drawing are lost and reported as `DrawingShapesNotWritten`.
 
 ## Conditional formatting
 
@@ -392,21 +394,40 @@ printer-settings part the model does not represent.
 ```csharp
 book.Sheets.Move("Summary", 0);                    // to first position
 Worksheet copy = book.Sheets.Copy("January", "February");   // copy inserted right after original
+
+// When fidelity is a policy decision, inspect diagnostics directly.
+SheetCopyResult copied = book.Sheets.Copy("January", "February audit", new SheetCopyOptions
+{
+    OnWarning = warning => Console.Error.WriteLine(warning),
+});
+if (copied.HasWarnings)
+    Console.WriteLine(string.Join(Environment.NewLine, copied.Warnings));
 ```
 
 A copy gets everything the model represents: values, styles, formulas, widths and heights, merges,
 freeze panes, auto-filter, classic and threaded comments, links, validation rules, conditional
-formatting, print settings, and protection. Every mutable object is copied by value, not shared:
-inserting a row in the copy does not shift a rule or a conversation on the original. Threaded
-messages receive new ids, and reply parent ids are remapped to the copied roots; their workbook-wide
-authors are reused.
+formatting, print settings, protection, pictures, and charts. Every mutable object — including
+picture and chart anchors — is copied by value, not shared; immutable image bytes may be shared.
+Inserting a row in the copy does not shift a rule, anchor, or conversation on the original.
+Threaded messages receive new ids, and reply parent ids are remapped to the copied roots; their
+workbook-wide authors are reused. A loaded chart's complete `chartSpace` and child relationships
+are cloned into the copy's newly allocated chart part, so its unmodelled axis/layout/style markup
+does not disappear merely because the chart was copied.
 
-A copy does not get unsupported drawing objects or other raw markup that belongs only to the source
-worksheet part. Modelled pictures are copied with independent anchors while sharing their immutable
-image bytes. One raw part cannot live at two paths, and a copy is a new sheet, not a second name for
-the old one. Formulas are copied as text, so in-sheet references follow the copy while those that
-name the source sheet by name still point at it. Table names are unique in the workbook, so a copied
-table gets its own: `Sales` → `Sales2`.
+A copy is a new sheet, not a second name for the same package part. Opaque worksheet markup,
+unmodelled shapes/text boxes, and unsupported sheet relationships are therefore not guessed at or
+silently claimed as copied. They produce one aggregated warning with stable code
+`SheetCopyContentNotCopied`. The three-argument overload returns it in
+`SheetCopyResult.Warnings`; both overloads also send it through `Workbook.OnWarning`. Modelled
+pictures and charts are still copied even when the source drawing also contains unsupported shapes.
+
+Unqualified formula references naturally resolve on the copy. By default, explicit self references
+are retargeted too: a formula, validation/conditional-format formula, internal hyperlink, or chart
+series containing `January!A1` becomes `February!A1`. References to other workbooks such as
+`[1]January!A1` stay external. Set `RetargetSelfReferences = false` only when intentionally keeping
+the historical point-back-to-source behaviour. Table names are workbook-unique, so a copied table
+gets its own name: `Sales` → `Sales2`; table-only raw features such as calculated-column markup are
+reported by the same fidelity diagnostic when they cannot be regenerated.
 
 ## Document properties
 
@@ -512,12 +533,17 @@ namespace URI and local name, not by whatever XML prefix the author chose (`c`, 
 The full list of what load-save changes or loses — per the rule that any deviation from the spec
 must be declared:
 
-- **Built-in charts are read and created but not edited**: `sheet.Charts` shows type, title, and
-  series (references + cached points); `sheet.AddChart(...)` creates a new one; raw `chartSpace` of
-  an untouched chart is written back byte for byte. A loaded chart cannot be changed — only deleted
-  and recreated. Chart sheets and pivot tables round-trip without API.
-- **Sheet copy** does not take drawings and other raw markup from the source worksheet part, and
-  does not rewrite formulas that name the source sheet by name.
+- **Built-in charts**: `sheet.Charts` exposes the chart kind (including `Bubble` and per-series
+  `ChartSeries.Kind` for combined charts), title, and series (`ValuesReference`, `CategoriesReference`,
+  `BubbleSizesReference`, plus cached points); `sheet.AddChart(...)` creates a new chart, and
+  `chart.SetTitle(...)`, `chart.SetData(...)`, and `chart.RefreshCache()` update an existing one.
+  Raw `chartSpace` of an untouched loaded chart is written back byte for byte, while row/column
+  insertions and deletions automatically shift both the chart anchor and its `c:f` series references.
+  Chart sheets and pivot tables round-trip without API.
+- **Sheet copy** rebuilds modelled pictures and charts and retargets explicit self references by
+  default. It does not clone opaque worksheet markup or unmodelled drawing objects blindly; such
+  omissions are reported as `SheetCopyContentNotCopied` and are available directly from the
+  `SheetCopyResult` overload.
 - **Sheet rename** updates only chart `c:f` and pivot `worksheetSource`: if foreign markup hid a
   sheet name elsewhere, it stays old there.
 - **Styles**: a `dxf` format the model cannot express (alignment, fill pattern) is parsed into

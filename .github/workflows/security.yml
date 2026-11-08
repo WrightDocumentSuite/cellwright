@@ -1,0 +1,88 @@
+name: Security
+
+on:
+  schedule:
+    - cron: "17 4 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  NUGET_PACKAGES: ${{ github.workspace }}/artifacts/nuget-security-cache
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-security-audit-v2-${{ runner.os }}-${{ hashFiles('global.json', 'NuGet.Config', 'nuget.config', 'Directory.Build.props', 'Directory.Packages.props', '**/*.csproj', '**/*.props', '**/*.targets', '**/packages.lock.json') }}
+
+      - run: dotnet restore Cellwright.slnx --locked-mode
+      - run: dotnet restore fuzz/Cellwright.Fuzz/Cellwright.Fuzz.csproj --locked-mode
+
+      - name: Reject direct and transitive NuGet advisories
+        run: >-
+          python eng/security/audit_packages.py
+          Cellwright.slnx
+          fuzz/Cellwright.Fuzz/Cellwright.Fuzz.csproj
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-security-fuzz-v2-${{ runner.os }}-${{ hashFiles('global.json', 'NuGet.Config', 'nuget.config', 'Directory.Build.props', 'Directory.Packages.props', '**/*.csproj', '**/*.props', '**/*.targets', '**/packages.lock.json') }}
+
+      - name: Cache verified corpus archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.corpus-cache
+          key: corpus-v1-${{ hashFiles('eng/corpus/manifest.json') }}
+
+      - name: Prepare verified fuzz seeds
+        run: >-
+          python eng/corpus/fetch.py
+          --manifest eng/corpus/manifest.json
+          --root "${RUNNER_TEMP}/cellwright-fuzz-corpus"
+          --cache .corpus-cache
+          --seed-output artifacts/fuzz/corpus
+
+      - name: Run coverage-guided spreadsheet parser fuzzing
+        shell: bash
+        run: bash eng/fuzz/run-libfuzzer.sh artifacts/fuzz/corpus 120
+
+      - name: Upload evolving corpus and crash reproducers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spreadsheet-fuzz-artifacts
+          path: |
+            artifacts/fuzz/corpus
+            artifacts/fuzz/crashes
+          if-no-files-found: error
+          retention-days: 14

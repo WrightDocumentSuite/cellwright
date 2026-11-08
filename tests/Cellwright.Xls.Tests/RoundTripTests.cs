@@ -318,6 +318,62 @@ public sealed class RoundTripTests
         Assert.Contains(warnings, static warning => warning.Code == "GridTooLarge");
     }
 
+    [Fact]
+    public async Task RichTextSurvivesRoundTripAndAnotherReader()
+    {
+        Workbook original = Workbook.Create();
+        Worksheet sheet = original.Sheets.Add("Rich");
+        var boldRed = FontStyle.Default with
+        {
+            Bold = true,
+            Color = ExcelColor.FromRgb(0xFF, 0x00, 0x00),
+        };
+        var italicBlue = FontStyle.Default with
+        {
+            Italic = true,
+            Underline = UnderlineStyle.Single,
+            Color = ExcelColor.FromRgb(0x00, 0x00, 0xFF),
+        };
+
+        sheet.Cell("A1").SetRichText(new RichText(
+        [
+            new RichTextRun("Plain "),
+            new RichTextRun("Bold", boldRed),
+            new RichTextRun(" Italic", italicBlue),
+        ]));
+        sheet["A2"] = CellValue.Text("Plain Bold Italic");
+
+        using var buffer = new MemoryStream();
+        await XlsWorkbook.SaveAsync(original, buffer, options: null, TestContext.Current.CancellationToken);
+        byte[] bytes = buffer.ToArray();
+
+        using var forOracle = new MemoryStream(bytes, writable: false);
+        var oracle = new NPOI.HSSF.UserModel.HSSFWorkbook(forOracle);
+        NPOI.SS.UserModel.IRichTextString oracleRich = oracle.GetSheetAt(0).GetRow(0).GetCell(0).RichStringCellValue;
+        Assert.Equal("Plain Bold Italic", oracleRich.String);
+        Assert.True(oracleRich.NumFormattingRuns >= 2);
+
+        using var forUs = new MemoryStream(bytes, writable: false);
+        Workbook reloaded = await XlsWorkbook.LoadAsync(forUs, options: null, TestContext.Current.CancellationToken);
+        Worksheet readSheet = reloaded.Sheets[0];
+
+        RichText? rich = readSheet.Cell("A1").RichText;
+        Assert.NotNull(rich);
+        Assert.Equal("Plain Bold Italic", rich.Text);
+        Assert.Equal(3, rich.Count);
+        Assert.Equal("Plain ", rich[0].Text);
+        Assert.Equal("Bold", rich[1].Text);
+        Assert.True(rich[1].Font?.Bold);
+        Assert.Equal(ExcelColor.FromRgb(0xFF, 0x00, 0x00), rich[1].Font?.Color);
+        Assert.Equal(" Italic", rich[2].Text);
+        Assert.True(rich[2].Font?.Italic);
+        Assert.Equal(UnderlineStyle.Single, rich[2].Font?.Underline);
+        Assert.Equal(ExcelColor.FromRgb(0x00, 0x00, 0xFF), rich[2].Font?.Color);
+
+        Assert.Null(readSheet.Cell("A2").RichText);
+        Assert.Equal("Plain Bold Italic", readSheet["A2"].GetText());
+    }
+
     private static async Task<Workbook> RoundTripAsync(Workbook workbook)
     {
         using var buffer = new MemoryStream();

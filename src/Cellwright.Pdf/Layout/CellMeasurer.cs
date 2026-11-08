@@ -83,15 +83,54 @@ internal sealed class CellMeasurer
         CellStyle style = StyleOf(row, column);
         TextAppearance appearance = Appearances.Of(style.Font);
 
-        // Every cell wants room for one line of its own font, wrapped or not.
-        if (!style.Alignment.WrapText || style.Alignment.TextRotation != 0)
+        if (style.Alignment.TextRotation != 0)
+        {
+            int degrees = style.Alignment.TextRotation;
+            if (degrees is (>= 1 and < 90) or (> 90 and < 180))
+            {
+                string rotatedText = TextOf(value, style);
+                if (rotatedText.Length > 0)
+                {
+                    double angleDeg = degrees <= 90 ? degrees : degrees - 90;
+                    double rad = angleDeg * Math.PI / 180.0;
+                    double w = appearance.Measure(rotatedText);
+                    double h = appearance.LineHeight;
+                    double projectedHeight = (w * Math.Sin(rad)) + (h * Math.Cos(rad));
+                    return projectedHeight + RowPadding;
+                }
+            }
+
             return appearance.LineHeight + RowPadding;
+        }
 
         string text = TextOf(value, style);
         if (text.Length == 0)
             return appearance.LineHeight + RowPadding;
 
         double room = Room(columnWidth, style.Alignment);
+        if (_sheet.Cell(row, column).RichText is { IsFormatted: true } rich &&
+            string.Equals(text, rich.Text, StringComparison.Ordinal))
+        {
+            List<(double Width, double LineHeight)> richLines =
+                CellPlacer.MeasureRichLines(rich, style.Font, Appearances, style.Alignment, room);
+            if (!style.Alignment.WrapText)
+            {
+                double maxLineHeight = appearance.LineHeight;
+                foreach ((_, double lineHeight) in richLines)
+                    maxLineHeight = Math.Max(maxLineHeight, lineHeight);
+                return maxLineHeight + RowPadding;
+            }
+
+            double totalHeight = 0;
+            foreach ((_, double lineHeight) in richLines)
+                totalHeight += lineHeight;
+            return totalHeight + RowPadding;
+        }
+
+        // Every cell wants room for one line of its own font, wrapped or not.
+        if (!style.Alignment.WrapText)
+            return appearance.LineHeight + RowPadding;
+
         int lines = CellPlacer.CountWrappedLines(text, appearance, room, style.Alignment);
         return (lines * appearance.LineHeight) + RowPadding;
     }
@@ -129,7 +168,32 @@ internal sealed class CellMeasurer
         }
 
         if (style.Alignment.TextRotation != 0)
+        {
+            int degrees = style.Alignment.TextRotation;
+            if (degrees is (>= 1 and < 90) or (> 90 and < 180))
+            {
+                double angleDeg = degrees <= 90 ? degrees : degrees - 90;
+                double rad = angleDeg * Math.PI / 180.0;
+                double w = appearance.Measure(text);
+                double h = appearance.LineHeight;
+                double projectedWidth = (w * Math.Cos(rad)) + (h * Math.Sin(rad));
+                return projectedWidth + (2 * Padding);
+            }
+
             return appearance.LineHeight + (2 * Padding);
+        }
+
+        if (_sheet.Cell(row, column).RichText is { IsFormatted: true } rich &&
+            string.Equals(text, rich.Text, StringComparison.Ordinal))
+        {
+            List<(double Width, double LineHeight)> richLines =
+                CellPlacer.MeasureRichLines(
+                    rich, style.Font, Appearances, style.Alignment with { WrapText = false }, double.MaxValue);
+            double widestRich = 0;
+            foreach ((double width, _) in richLines)
+                widestRich = Math.Max(widestRich, width);
+            return widestRich + (2 * Padding) + (style.Alignment.Indent * IndentStep);
+        }
 
         // A cell holding several lines is as wide as its widest one. Splitting is worth avoiding
         // in the case that is almost every cell: one line, already a string, measured as it is.

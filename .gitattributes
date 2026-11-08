@@ -1,0 +1,25 @@
+* text=auto
+
+# Source and build inputs must have the same bytes in Git, local builds, and Source Link.
+*.cs          text eol=lf
+*.csproj      text eol=lf
+*.props       text eol=lf
+*.targets     text eol=lf
+*.slnx        text eol=lf
+*.editorconfig text eol=lf
+*.gitattributes text eol=lf
+*.gitignore   text eol=lf
+
+# Documentation, configuration, and automation are cross-platform.
+*.md          text eol=lf
+*.json        text eol=lf
+*.xml         text eol=lf
+*.config      text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+*.ps1         text eol=lf
+*.sh          text eol=lf
+
+# Native Windows launchers, when present, keep their conventional endings.
+*.cmd         text eol=crlf
+*.bat         text eol=crlf

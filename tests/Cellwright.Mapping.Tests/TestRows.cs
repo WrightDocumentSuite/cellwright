@@ -25,3 +25,25 @@ public partial record struct Measurement(
     [ExcelColumn("Метка времени")] DateTime Timestamp,
     double? Value,
     bool Valid);
+
+public enum OrderPriority
+{
+    Low = 0,
+    Normal = 1,
+    High = 2,
+}
+
+public static partial class NestedRowContainer
+{
+    [ExcelRow]
+    public sealed partial record ExtendedRow(
+        Guid Id,
+        OrderPriority Priority,
+        OrderPriority? SecondaryPriority,
+        float Ratio,
+        short Rank,
+        byte Flags,
+        TimeOnly ScheduledAt,
+        DateTimeOffset CreatedAt,
+        [property: ExcelColumn("Keyword\nCol")] string @class);
+}

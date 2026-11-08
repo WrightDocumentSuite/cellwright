@@ -38,28 +38,28 @@ internal static class CellInformationFunctions
             case "contents":
                 return FormulaValue.Scalar(context.ReadCell(sheet, cell.Row, cell.Column));
             case "type":
-            {
-                CellValue value = context.ReadCell(sheet, cell.Row, cell.Column);
-                return FormulaValue.Text(value.IsBlank ? "b" : value.IsText ? "l" : "v");
-            }
+                {
+                    CellValue value = context.ReadCell(sheet, cell.Row, cell.Column);
+                    return FormulaValue.Text(value.IsBlank ? "b" : value.IsText ? "l" : "v");
+                }
 
             case "protect":
                 return FormulaValue.Number(style.Protection.Locked ? 1 : 0);
             case "width":
                 return FormulaValue.Number(Math.Truncate(sheet.Column(cell.Column).Width ?? 8.43));
             case "prefix":
-            {
-                CellValue value = context.ReadCell(sheet, cell.Row, cell.Column);
-                if (!value.IsText)
-                    return FormulaValue.Text("");
-                return FormulaValue.Text(style.Alignment.Horizontal switch
                 {
-                    HorizontalAlignment.Right => "\"",
-                    HorizontalAlignment.Center => "^",
-                    HorizontalAlignment.Fill => "\\",
-                    _ => "'",
-                });
-            }
+                    CellValue value = context.ReadCell(sheet, cell.Row, cell.Column);
+                    if (!value.IsText)
+                        return FormulaValue.Text("");
+                    return FormulaValue.Text(style.Alignment.Horizontal switch
+                    {
+                        HorizontalAlignment.Right => "\"",
+                        HorizontalAlignment.Center => "^",
+                        HorizontalAlignment.Fill => "\\",
+                        _ => "'",
+                    });
+                }
 
             case "filename":
                 // The engine works on a model, not a file on disk; Excel returns "" for a

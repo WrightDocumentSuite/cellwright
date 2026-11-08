@@ -145,8 +145,8 @@ that would touch every record `BiffWriter` writes.
 | Area | Details |
 | --- | --- |
 | Container | MS-CFB v3/v4: FAT, DIFAT, miniFAT, directory; streams `Workbook` (BIFF8) and `Book` (BIFF5) |
-| Values | RK, MulRk, Number, BoolErr, Blank, MulBlank, LabelSst, Label, RString |
-| Strings | SST with `Continue` stitching (including strings split mid-character) |
+| Values | RK, MulRk, Number, BoolErr, Blank, MulBlank, LabelSst, Label, RString (with per-run rich text formatting) |
+| Strings | SST with `Continue` stitching (including strings split mid-character and rich-text formatting runs) |
 | Formulas | Rgce → text: all operators and operands, 3-D references, arrays, shared formulas via PtgExp |
 | Link table | SupBook/ExternSheet/ExternName: references to another workbook with its path and sheet names, add-in function names (Analysis ToolPak's `EOMONTH` and the like) |
 | Styles | Font, Format, XF, Style, Palette → `CellStyle` in the workbook's shared pool |
@@ -229,7 +229,7 @@ is written as the last value with a warning.
 
 | Area | Details |
 | --- | --- |
-| Values | RK/Number, LabelSst with shared string table, BoolErr, Blank; dates as numbers with their format |
+| Values | RK/Number, LabelSst with shared string table (including rich-text formatting runs), BoolErr, Blank; dates as numbers with their format |
 | Formulas | Ptg via `Cellwright.Formulas` parser, including 3-D references (SupBook + ExternSheet) |
 | Styles | Font, Format, XF, Style, 56-slot palette with color quantization |
 | Sheet | ColInfo, Row, MergeCells, Window2/Pane/Scl, HLink, Protect |
@@ -316,7 +316,6 @@ broken. Codes specific to the binary format:
   true" for such rules come from order in the file.
 - **BIFF5 and BIFF2–4**: values and basic formats only; formulas as cached value. Streaming is not
   available for them: without a sheet table there is nothing to seek to.
-- **Rich text** in a cell collapses to plain text — same as on the xlsx side.
 - **Ptg operand classes** on write are set to the value class. Excel rebuilds them on first
   recalculation, and every tested reader tolerates that, but a formula whose meaning depends on
   class difference may evaluate differently in Excel until the first recalc.

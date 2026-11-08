@@ -10,7 +10,7 @@ namespace Cellwright.Streaming;
 /// </summary>
 internal static class CommentsPart
 {
-    private const string _revisionNamespace = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision";
+    private const string RevisionNamespace = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision";
 
     /// <summary>
     /// Parses a comments part into flat notes; rich-text runs are concatenated. Placeholder
@@ -50,7 +50,7 @@ internal static class CommentsPart
     private static CellComment? ReadComment(XmlReader xml, List<string> authors)
     {
         string? reference = xml.GetAttribute("ref");
-        string? revisionUid = xml.GetAttribute("uid", _revisionNamespace);
+        string? revisionUid = xml.GetAttribute("uid", RevisionNamespace);
         int authorId = int.TryParse(xml.GetAttribute("authorId"), NumberStyles.None, CultureInfo.InvariantCulture, out int id)
             ? id
             : -1;

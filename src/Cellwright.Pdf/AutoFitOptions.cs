@@ -42,6 +42,13 @@ public sealed class AutoFitOptions
     public bool IncludeHiddenRows { get; init; }
 
     /// <summary>
+    /// Whether merged cells participate in row-height fitting. Off by default, matching Excel's
+    /// AutoFit behaviour. Column fitting always ignores merged cells because no one column owns
+    /// their width.
+    /// </summary>
+    public bool IncludeMergedCells { get; init; }
+
+    /// <summary>
     /// Whether a column that states no width of its own is left alone. Off by default, so
     /// auto-fitting a fresh sheet does something.
     /// </summary>

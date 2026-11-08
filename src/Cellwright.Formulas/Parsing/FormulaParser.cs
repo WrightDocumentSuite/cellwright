@@ -97,10 +97,20 @@ internal ref struct FormulaParser
         }
 
         ParsePrimary();
-        while (_current.Kind == TokenKind.Percent)
+        while (_current.Kind is TokenKind.Percent or TokenKind.OpenParen)
         {
-            Advance();
-            _builder.Emit(OpCode.Percent);
+            if (_current.Kind == TokenKind.Percent)
+            {
+                Advance();
+                _builder.Emit(OpCode.Percent);
+            }
+            else
+            {
+                Advance();
+                int argCount = ParseArguments();
+                Expect(TokenKind.CloseParen, ")");
+                _builder.EmitInvoke(argCount);
+            }
         }
     }
 
@@ -200,6 +210,15 @@ internal ref struct FormulaParser
             return;
         }
 
+        if (IsLambda(name))
+        {
+            ParseLambda();
+            return;
+        }
+
+        if (TryEmitLocal(name))
+            return;
+
         Advance();
         int argCount = ParseArguments();
         Expect(TokenKind.CloseParen, ")");
@@ -226,7 +245,7 @@ internal ref struct FormulaParser
         int scopeStart = _bindings.Count;
         while (_current.Kind == TokenKind.Name && NextTokenIsComma())
         {
-            string binding = _current.Text.ToString();
+            string binding = StripLocalPrefix(_current.Text.ToString());
             Advance();
             Advance();
             ParseExpression(1);
@@ -248,12 +267,39 @@ internal ref struct FormulaParser
         _builder.EmitLet(count);
     }
 
-    /// <summary>Emits a read of a <c>LET</c> binding, innermost first. Returns whether the name was bound.</summary>
+    private void ParseLambda()
+    {
+        int start = _current.Start;
+        Advance();
+        if (_current.Kind == TokenKind.CloseParen)
+            throw new FormulaParseException("LAMBDA needs a calculation expression", _text, start);
+
+        int scopeStart = _bindings.Count;
+        var parameterSlots = new List<int>();
+        while (_current.Kind == TokenKind.Name && NextTokenIsComma())
+        {
+            string paramName = StripLocalPrefix(_current.Text.ToString());
+            Advance();
+            Advance();
+            int slot = _builder.DeclareLocal(paramName);
+            parameterSlots.Add(slot);
+            _bindings.Add((paramName, slot));
+        }
+
+        int lambdaIndex = _builder.BeginLambda([.. parameterSlots]);
+        ParseExpression(1);
+        Expect(TokenKind.CloseParen, ")");
+        _bindings.RemoveRange(scopeStart, parameterSlots.Count);
+        _builder.EndLambda(lambdaIndex);
+    }
+
+    /// <summary>Emits a read of a <c>LET</c> or <c>LAMBDA</c> binding, innermost first. Returns whether the name was bound.</summary>
     private bool TryEmitLocal(string name)
     {
+        string normalized = StripLocalPrefix(name);
         for (int i = _bindings.Count - 1; i >= 0; i--)
         {
-            if (!string.Equals(_bindings[i].Name, name, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(_bindings[i].Name, normalized, StringComparison.OrdinalIgnoreCase))
                 continue;
 
             _builder.Emit(OpCode.PushLocal, _bindings[i].Slot);
@@ -262,6 +308,9 @@ internal ref struct FormulaParser
 
         return false;
     }
+
+    private static string StripLocalPrefix(string name) =>
+        name.StartsWith("_xlpm.", StringComparison.OrdinalIgnoreCase) ? name[6..] : name;
 
     /// <summary>
     /// Whether the token after the current one is a comma, which is what tells a binding name
@@ -278,6 +327,10 @@ internal ref struct FormulaParser
     private static bool IsLet(string name) =>
         name.Equals("LET", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("_xlfn.LET", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsLambda(string name) =>
+        name.Equals("LAMBDA", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("_xlfn.LAMBDA", StringComparison.OrdinalIgnoreCase);
 
     private int ParseArguments()
     {

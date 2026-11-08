@@ -71,6 +71,7 @@ public sealed class ChartRenderTests
         {
             ChartKind.Column, ChartKind.Bar, ChartKind.Line,
             ChartKind.Pie, ChartKind.Doughnut, ChartKind.Area,
+            ChartKind.Scatter, ChartKind.Bubble, ChartKind.Radar,
         })
         {
             using Rendered rendered = Rendered.Of(Charted(kind));
@@ -79,6 +80,66 @@ public sealed class ChartRenderTests
                 rendered.Diagnostics,
                 warning => warning.Subject?.StartsWith("chart", StringComparison.Ordinal) == true);
         }
+    }
+
+    [Fact]
+    public void ARadarChartDrawsSpokesWebAndCategoryLabels()
+    {
+        using Rendered rendered = Rendered.Of(Charted(ChartKind.Radar));
+
+        Assert.Contains("Выручка", rendered.Text(), StringComparison.Ordinal);
+        Assert.Contains("Янв", rendered.Text(), StringComparison.Ordinal);
+        Assert.Contains("S\n", rendered.Content(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AScatterChartPlotsNumericCoordinateMarkers()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = book.Sheets.Add("XY");
+        sheet["A1"] = 10d;
+        sheet["A2"] = 20d;
+        sheet["A3"] = 30d;
+        sheet["B1"] = 5d;
+        sheet["B2"] = 15d;
+        sheet["B3"] = 25d;
+        sheet.AddChart(ChartKind.Scatter, "D2:K17", "XY!$B$1:$B$3", categoriesReference: "XY!$A$1:$A$3", title: "Scatter Plot");
+
+        using Rendered rendered = Rendered.Of(book);
+        Assert.Contains("Scatter Plot", rendered.Text(), StringComparison.Ordinal);
+        Assert.Contains("re\nf", rendered.Content(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ABubbleChartAndCombinedChartRenderWithoutWarnings()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = book.Sheets.Add("Данные");
+        sheet["A1"] = "Янв";
+        sheet["A2"] = "Фев";
+        sheet["A3"] = "Мар";
+        sheet["B1"] = 100d;
+        sheet["B2"] = 150d;
+        sheet["B3"] = 90d;
+        sheet["C1"] = 10d;
+        sheet["C2"] = 30d;
+        sheet["C3"] = 20d;
+
+        sheet.AddChart(ChartKind.Bubble, "D2:K17", [
+            new ChartSeriesDefinition("Данные!$B$1:$B$3", "Данные!$A$1:$A$3", "Пузырьки", "Данные!$C$1:$C$3"),
+        ], title: "Bubble Chart");
+
+        sheet.AddChart(ChartKind.Column, "D19:K34", [
+            new ChartSeriesDefinition("Данные!$B$1:$B$3", "Данные!$A$1:$A$3", "Факт", Kind: ChartKind.Column),
+            new ChartSeriesDefinition("Данные!$C$1:$C$3", "Данные!$A$1:$A$3", "Тренд", Kind: ChartKind.Line),
+        ], title: "Combo Chart");
+
+        using Rendered rendered = Rendered.Of(book);
+        Assert.Contains("Bubble Chart", rendered.Text(), StringComparison.Ordinal);
+        Assert.Contains("Combo Chart", rendered.Text(), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            rendered.Diagnostics,
+            warning => warning.Subject?.StartsWith("chart", StringComparison.Ordinal) == true);
     }
 
     [Fact]

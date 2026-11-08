@@ -113,6 +113,7 @@ internal static class WorksheetEditor
         sheet.Comments.Reanchor(cell => shift.TryApply(ref cell) ? cell : null);
         sheet.ThreadedComments.Reanchor(cell => shift.TryApply(ref cell) ? cell : null);
         sheet.Pictures.Reanchor(cell => shift.TryApply(ref cell) ? cell : null);
+        sheet.Charts.Reanchor(cell => shift.TryApply(ref cell) ? cell : null);
         ReanchorMarkup(sheet, shift);
 
         foreach (DataValidation validation in sheet.Validations)
@@ -276,6 +277,25 @@ internal static class WorksheetEditor
             {
                 validation.Formula1 = FormulaText.Shift(validation.Formula1, shift, ownSheet);
                 validation.Formula2 = FormulaText.Shift(validation.Formula2, shift, ownSheet);
+            }
+
+            foreach (Chart chart in other.Charts)
+            {
+                ReadOnlyMemory<byte> rewritten = ChartPart.RetargetShift(
+                    chart.RawXml, shift, ownSheet, out bool changed);
+                if (!changed)
+                    continue;
+
+                chart.ReplaceRawXml(rewritten);
+                if (chart.SourcePartPath is { } partPath && workbook.Preserved is { } preserved &&
+                    preserved.Parts.ContainsKey(partPath))
+                {
+                    preserved.Parts[partPath] = rewritten.ToArray();
+                }
+                else
+                {
+                    other.Charts.MarkModified();
+                }
             }
         }
 

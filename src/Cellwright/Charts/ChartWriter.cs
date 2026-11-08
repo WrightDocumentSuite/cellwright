@@ -6,8 +6,14 @@ namespace Cellwright;
 /// <param name="ValuesReference">Reference the values come from, e.g. <c>Данные!$B$2:$B$10</c>.</param>
 /// <param name="CategoriesReference">Reference the category labels come from, or <see langword="null"/>.</param>
 /// <param name="Name">The series name, or <see langword="null"/> to leave it to the reader.</param>
+/// <param name="BubbleSizesReference">Reference the bubble sizes come from for a bubble chart, or <see langword="null"/>.</param>
+/// <param name="Kind">Optional per-series plot kind for a combined chart; defaults to the chart's kind.</param>
 public sealed record ChartSeriesDefinition(
-    string ValuesReference, string? CategoriesReference = null, string? Name = null);
+    string ValuesReference,
+    string? CategoriesReference = null,
+    string? Name = null,
+    string? BubbleSizesReference = null,
+    ChartKind? Kind = null);
 
 /// <summary>
 /// Generates the <c>chartSpace</c> part of a chart the model creates.
@@ -25,10 +31,11 @@ internal static class ChartWriter
     private const string CategoryAxisId = "111111111";
     private const string ValueAxisId = "222222222";
 
-    /// <summary>The kinds a chart can be created as. Reading knows more; creation is honest about less.</summary>
+    /// <summary>The kinds a chart can be created as.</summary>
     public static bool CanCreate(ChartKind kind) => kind is
         ChartKind.Column or ChartKind.Bar or ChartKind.Line or
-        ChartKind.Pie or ChartKind.Doughnut or ChartKind.Area;
+        ChartKind.Pie or ChartKind.Doughnut or ChartKind.Area or
+        ChartKind.Scatter or ChartKind.Bubble or ChartKind.Radar;
 
     /// <summary>Builds the part for a new chart.</summary>
     /// <param name="workbook">The workbook the series references speak of, for the caches.</param>
@@ -55,8 +62,30 @@ internal static class ChartWriter
             }
 
             xml.WriteRaw("<c:plotArea><c:layout/>"u8);
-            WritePlotGroup(xml, workbook, kind, series);
-            if (HasAxes(kind))
+            bool anyAxes = false;
+            int index = 0;
+            while (index < series.Count)
+            {
+                ChartKind groupKind = series[index].Kind is { } overrideKind && CanCreate(overrideKind)
+                    ? overrideKind
+                    : kind;
+                int groupEnd = index + 1;
+                while (groupEnd < series.Count)
+                {
+                    ChartKind nextKind = series[groupEnd].Kind is { } nextOverride && CanCreate(nextOverride)
+                        ? nextOverride
+                        : kind;
+                    if (nextKind != groupKind)
+                        break;
+                    groupEnd++;
+                }
+
+                WritePlotGroup(xml, workbook, groupKind, series, index, groupEnd);
+                anyAxes |= HasAxes(groupKind);
+                index = groupEnd;
+            }
+
+            if (anyAxes)
                 WriteAxes(xml);
             xml.WriteRaw("</c:plotArea>"u8);
 
@@ -89,7 +118,12 @@ internal static class ChartWriter
     }
 
     private static void WritePlotGroup(
-        Utf8XmlWriter xml, Workbook workbook, ChartKind kind, IReadOnlyList<ChartSeriesDefinition> series)
+        Utf8XmlWriter xml,
+        Workbook workbook,
+        ChartKind kind,
+        IReadOnlyList<ChartSeriesDefinition> series,
+        int startIndex,
+        int endIndex)
     {
         ReadOnlySpan<byte> element = kind switch
         {
@@ -97,6 +131,9 @@ internal static class ChartWriter
             ChartKind.Line => "c:lineChart"u8,
             ChartKind.Pie => "c:pieChart"u8,
             ChartKind.Doughnut => "c:doughnutChart"u8,
+            ChartKind.Scatter => "c:scatterChart"u8,
+            ChartKind.Bubble => "c:bubbleChart"u8,
+            ChartKind.Radar => "c:radarChart"u8,
             _ => "c:areaChart"u8,
         };
 
@@ -118,12 +155,21 @@ internal static class ChartWriter
             case ChartKind.Pie or ChartKind.Doughnut:
                 xml.WriteRaw("<c:varyColors val=\"1\"/>"u8);
                 break;
+            case ChartKind.Scatter:
+                xml.WriteRaw("<c:scatterStyle val=\"lineMarker\"/>"u8);
+                break;
+            case ChartKind.Bubble:
+                xml.WriteRaw("<c:varyColors val=\"0\"/>"u8);
+                break;
+            case ChartKind.Radar:
+                xml.WriteRaw("<c:radarStyle val=\"standard\"/>"u8);
+                break;
             default:
                 break;
         }
 
-        for (int i = 0; i < series.Count; i++)
-            WriteSeries(xml, workbook, series[i], i);
+        for (int i = startIndex; i < endIndex; i++)
+            WriteSeries(xml, workbook, kind, series[i], i);
 
         if (kind == ChartKind.Doughnut)
             xml.WriteRaw("<c:holeSize val=\"50\"/>"u8);
@@ -142,8 +188,10 @@ internal static class ChartWriter
         xml.WriteRaw(">"u8);
     }
 
-    private static void WriteSeries(Utf8XmlWriter xml, Workbook workbook, ChartSeriesDefinition series, int index)
+    private static void WriteSeries(
+        Utf8XmlWriter xml, Workbook workbook, ChartKind kind, ChartSeriesDefinition series, int index)
     {
+        bool isXY = kind is ChartKind.Scatter or ChartKind.Bubble;
         xml.WriteRaw("<c:ser><c:idx val=\""u8);
         xml.WriteInt32(index);
         xml.WriteRaw("\"/><c:order val=\""u8);
@@ -159,18 +207,32 @@ internal static class ChartWriter
 
         if (series.CategoriesReference is { Length: > 0 } categories)
         {
-            xml.WriteRaw("<c:cat><c:strRef><c:f>"u8);
+            xml.WriteRaw(isXY ? "<c:xVal><c:strRef><c:f>"u8 : "<c:cat><c:strRef><c:f>"u8);
             xml.WriteText(categories);
             xml.WriteRaw("</c:f>"u8);
             WriteStringCache(xml, workbook, categories);
-            xml.WriteRaw("</c:strRef></c:cat>"u8);
+            xml.WriteRaw(isXY ? "</c:strRef></c:xVal>"u8 : "</c:strRef></c:cat>"u8);
         }
 
-        xml.WriteRaw("<c:val><c:numRef><c:f>"u8);
+        xml.WriteRaw(isXY ? "<c:yVal><c:numRef><c:f>"u8 : "<c:val><c:numRef><c:f>"u8);
         xml.WriteText(series.ValuesReference);
         xml.WriteRaw("</c:f>"u8);
         WriteNumberCache(xml, workbook, series.ValuesReference);
-        xml.WriteRaw("</c:numRef></c:val></c:ser>"u8);
+        xml.WriteRaw(isXY ? "</c:numRef></c:yVal>"u8 : "</c:numRef></c:val>"u8);
+
+        if (kind == ChartKind.Bubble)
+        {
+            string bubbleRef = series.BubbleSizesReference is { Length: > 0 } explicitRef
+                ? explicitRef
+                : series.ValuesReference;
+            xml.WriteRaw("<c:bubbleSize><c:numRef><c:f>"u8);
+            xml.WriteText(bubbleRef);
+            xml.WriteRaw("</c:f>"u8);
+            WriteNumberCache(xml, workbook, bubbleRef);
+            xml.WriteRaw("</c:numRef></c:bubbleSize>"u8);
+        }
+
+        xml.WriteRaw("</c:ser>"u8);
     }
 
     /// <summary>Writes the cached values of a reference, read from the live cells.</summary>

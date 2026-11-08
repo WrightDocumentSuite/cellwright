@@ -224,23 +224,32 @@ internal sealed class XlsbSheetParser(
         SetCell(sink, body, Text(Biff12Values.ReadString(body, ref offset, loadBudget)));
     }
 
-    /// <summary>Rich text written straight into the cell; the runs after it are not modelled.</summary>
+    /// <summary>Rich text written straight into the cell along with its formatting runs.</summary>
     private void ReadRichString(WorksheetContentSink sink, ReadOnlySpan<byte> body)
     {
-        if (body.Length < 9)
+        if (body.Length < 9 || !TryCell(body, out CellRef cell, out int styleIndex))
             return;
 
-        int offset = 9;
-        SetCell(sink, body, Text(Biff12Values.ReadString(body, ref offset, loadBudget)));
+        string text = XlsbStringTable.ReadRichString(body[8..], globals, out RichText? rich, loadBudget);
+        CellValue textValue = Text(text);
+        sink.OnPooledCell(cell, textValue, globals.StyleOf(styleIndex), formula: null);
+        if (rich is { IsFormatted: true } && textValue.GetText().Length == rich.Text.Length)
+            sink.Sheet.RichStringTable[cell] = new IO.RichStringMarkup(rich.Text, Streaming.RichTextMarkup.ToMarkup(rich));
     }
 
     private void ReadSharedString(WorksheetContentSink sink, ReadOnlySpan<byte> body)
     {
-        if (body.Length < 12)
+        if (body.Length < 12 || !TryCell(body, out CellRef cell, out int styleIndex))
             return;
 
         int index = (int)BinaryPrimitives.ReadUInt32LittleEndian(body[8..]);
-        SetCell(sink, body, Text(globals.StringAt(index), accountText: false));
+        CellValue textValue = Text(globals.StringAt(index), accountText: false);
+        sink.OnPooledCell(cell, textValue, globals.StyleOf(styleIndex), formula: null);
+        if (globals.RichStringAt(index) is { IsFormatted: true } rich &&
+            textValue.GetText().Length == rich.Text.Length)
+        {
+            sink.Sheet.RichStringTable[cell] = new IO.RichStringMarkup(rich.Text, Streaming.RichTextMarkup.ToMarkup(rich));
+        }
     }
 
     /// <summary>

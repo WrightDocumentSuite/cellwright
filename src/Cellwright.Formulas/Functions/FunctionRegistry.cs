@@ -86,6 +86,7 @@ internal static class FunctionRegistry
         MatrixFunctions.Register(builder);
         LogicalFunctions.Register(builder);
         TextFunctions.Register(builder);
+        TextSplitFunctions.Register(builder);
         NumberTextFunctions.Register(builder);
         DateTimeFunctions.Register(builder);
         DayCountFunctions.Register(builder);
@@ -111,7 +112,9 @@ internal static class FunctionRegistry
         DatabaseFunctions.Register(builder);
         RegressionFunctions.Register(builder);
         DynamicArrayFunctions.Register(builder);
+        ArrayShapeFunctions.Register(builder);
         ArrayBuilderFunctions.Register(builder);
+        LambdaFunctions.Register(builder);
         DistributionFunctions.Register(builder);
         CashFlowFunctions.Register(builder);
         DepreciationFunctions.Register(builder);

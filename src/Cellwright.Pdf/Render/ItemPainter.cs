@@ -215,16 +215,29 @@ internal sealed partial class ItemPainter
 
     private void PaintLink(LinkItem link)
     {
-        if (string.IsNullOrEmpty(link.Url) || link.Width <= 0 || link.Height <= 0)
+        if (link.Width <= 0 || link.Height <= 0)
+            return;
+
+        if (string.IsNullOrEmpty(link.Url) && link.DestinationPageIndex is null)
             return;
 
         double x = _offset.X + (link.X * _scale);
         double y = _offset.Y + (link.Y * _scale);
         double width = link.Width * _scale;
         double height = link.Height * _scale;
+        PdfRectangle bounds = PdfRectangle.FromSize(x, _geometry.ToPdfY(y + height), width, height);
 
-        _page.Annotations.AddLink(
-            PdfRectangle.FromSize(x, _geometry.ToPdfY(y + height), width, height), link.Url);
+        if (!string.IsNullOrEmpty(link.Url))
+        {
+            _page.Annotations.AddLink(bounds, link.Url);
+        }
+        else if (link.DestinationPageIndex is int pageIndex &&
+                 pageIndex >= 0 &&
+                 pageIndex < _page.Document.Pages.Count)
+        {
+            PdfLinkAnnotation annotation = _page.Annotations.AddLink(bounds, "https://internal.invalid/");
+            annotation.LinkTo(pageIndex);
+        }
     }
 
     private void PaintComment(CommentItem item)
@@ -317,8 +330,8 @@ internal interface ITagSink
 {
     /// <summary>Reserves the next marked-content identifier and attaches it to a structure element.</summary>
     /// <param name="tag">The element the sequence belongs to.</param>
-    int Next(TagRef tag);
+    public int Next(TagRef tag);
 
     /// <summary>Places an annotation in reading order under its semantic owner.</summary>
-    void AddAnnotation(TagRef? tag, PdfAnnotation annotation);
+    public void AddAnnotation(TagRef? tag, PdfAnnotation annotation);
 }

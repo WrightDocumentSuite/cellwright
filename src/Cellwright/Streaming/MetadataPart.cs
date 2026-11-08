@@ -52,17 +52,17 @@ internal static class MetadataPart
                         break;
 
                     case "rc" when inCellMetadata:
-                    {
-                        position++;
-                        if (int.TryParse(xml.GetAttribute("t"), NumberStyles.None, CultureInfo.InvariantCulture, out int type) &&
-                            type >= 1 && type <= typeNames.Count &&
-                            typeNames[type - 1] == "XLDAPR")
                         {
-                            dynamicIndexes.Add(position);
-                        }
+                            position++;
+                            if (int.TryParse(xml.GetAttribute("t"), NumberStyles.None, CultureInfo.InvariantCulture, out int type) &&
+                                type >= 1 && type <= typeNames.Count &&
+                                typeNames[type - 1] == "XLDAPR")
+                            {
+                                dynamicIndexes.Add(position);
+                            }
 
-                        break;
-                    }
+                            break;
+                        }
 
                     default:
                         break;

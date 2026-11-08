@@ -133,9 +133,10 @@ public sealed class DistributionTests
     public void TheIncompleteGammaMatchesItsClosedForm(double half)
     {
         // Ten degrees of freedom means a shape of five, and Q(5,x) = e^-x (1+x+x²/2+x³/6+x⁴/24).
-        string closed = $"EXP(-{half})*(1+{half}+{half}^2/2+{half}^3/6+{half}^4/24)";
+        string closed = FormattableString.Invariant(
+            $"EXP(-{half:R})*(1+{half:R}+{half:R}^2/2+{half:R}^3/6+{half:R}^4/24)");
         double expected = Eval(closed).GetNumber();
-        double actual = Eval($"CHISQ.DIST.RT({2 * half},10)").GetNumber();
+        double actual = Eval(FormattableString.Invariant($"CHISQ.DIST.RT({2 * half:R},10)")).GetNumber();
 
         Assert.True(
             Math.Abs(actual - expected) <= expected * 1e-14,

@@ -68,13 +68,15 @@ internal static class DrawingLoader
                 });
             }
 
-            // A chart frame still counts as a shape the regenerated drawing cannot reproduce:
-            // the model reads charts but does not yet write them, so a drawing rebuilt from the
-            // pictures alone would lose them.
-            sheet.DrawingHasOtherShapes = result.OtherShapes > 0 || result.ChartFrames.Count > 0;
+            // Pictures and chart frames both have complete write paths. Only anchors the model
+            // could not classify remain a fidelity risk when a drawing is regenerated.
+            sheet.DrawingHasOtherShapes = result.OtherShapes > 0;
         }
         catch (System.Xml.XmlException exception)
         {
+            // The part exists but no anchors could be classified. Treat it as wholly opaque so
+            // a later copy or drawing edit cannot imply that everything was represented.
+            sheet.DrawingHasOtherShapes = true;
             warn(new WorkbookWarning(
                 "BadDrawing", $"The drawing of sheet '{sheet.Name}' could not be read: {exception.Message}"));
         }

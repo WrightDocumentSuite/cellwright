@@ -26,13 +26,19 @@ internal sealed class PageRenderer
     {
         ArgumentNullException.ThrowIfNull(pages);
 
-        foreach (ComposedPage composed in pages)
-            RenderPage(composed, tags);
+        var pdfPages = new PdfPage[pages.Count];
+        for (int i = 0; i < pages.Count; i++)
+        {
+            ComposedPage composed = pages[i];
+            pdfPages[i] = _context.Pdf.Pages.Add(new PageSize(composed.Geometry.Width, composed.Geometry.Height));
+        }
+
+        for (int i = 0; i < pages.Count; i++)
+            RenderPage(pages[i], pdfPages[i], tags);
     }
 
-    private void RenderPage(ComposedPage composed, ITagWriter? tags)
+    private void RenderPage(ComposedPage composed, PdfPage page, ITagWriter? tags)
     {
-        PdfPage page = _context.Pdf.Pages.Add(new PageSize(composed.Geometry.Width, composed.Geometry.Height));
         ITagSink? sink = tags?.ForPage(page, composed);
 
         using var canvas = ContentCanvas.ForPage(page);
@@ -73,5 +79,5 @@ internal interface ITagWriter
     /// <summary>Starts collecting the marked content of one page.</summary>
     /// <param name="page">The page being drawn.</param>
     /// <param name="composed">What was composed for it.</param>
-    ITagSink ForPage(PdfPage page, ComposedPage composed);
+    public ITagSink ForPage(PdfPage page, ComposedPage composed);
 }

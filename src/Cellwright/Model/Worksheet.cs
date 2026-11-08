@@ -20,6 +20,7 @@ public sealed class Worksheet
         Workbook = workbook;
         _name = name;
         Id = id;
+        Charts = new ChartCollection(this);
         ThreadedComments = new ThreadedCommentCollection(this);
         Tables = new TableCollection(this);
     }
@@ -107,7 +108,7 @@ public sealed class Worksheet
     /// chart's raw markup is the source of truth and writes back byte for byte until the
     /// sheet's drawing is regenerated.
     /// </summary>
-    public ChartCollection Charts { get; } = new();
+    public ChartCollection Charts { get; }
 
     /// <summary>Adds a chart with one series.</summary>
     /// <param name="kind">What to plot: column, bar, line, pie, doughnut or area.</param>
@@ -169,9 +170,9 @@ public sealed class Worksheet
     public PictureCollection Pictures { get; } = new();
 
     /// <summary>
-    /// Whether the drawing this sheet was loaded from held anything besides pictures — a chart,
-    /// a shape, a text box. Regenerating the part would lose those, so the saver warns rather
-    /// than dropping them quietly.
+    /// Whether the drawing this sheet was loaded from held anything besides the pictures and
+    /// charts the model can write — for example a shape or text box. Regenerating the part would
+    /// lose those, so the saver warns rather than dropping them quietly.
     /// </summary>
     internal bool DrawingHasOtherShapes { get; set; }
 
@@ -339,6 +340,18 @@ public sealed class Worksheet
             if (!hyperlink.IsExternal)
                 hyperlink.Location = FormulaText.RenameSheet(hyperlink.Location, oldName, newName);
         }
+
+        foreach (Chart chart in Charts)
+        {
+            ReadOnlyMemory<byte> rewritten = ChartPart.RetargetSheetName(
+                chart.RawXml, oldName, newName, out _, out bool changed);
+            if (!changed)
+                continue;
+
+            chart.ReplaceRawXml(rewritten);
+            if (chart.SourcePartPath is null || Workbook.Preserved?.Parts.ContainsKey(chart.SourcePartPath) != true)
+                Charts.MarkModified();
+        }
     }
 
     /// <summary>Notifies the workbook that a cell changed; <paramref name="structural"/> marks formula edits.</summary>
@@ -490,6 +503,37 @@ public sealed class Worksheet
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
         Row(row).Height = height;
+    }
+
+    /// <summary>Formats the worksheet's used range as a CSV or TSV string.</summary>
+    public string ToCsv(CsvOptions? options = null) =>
+        CsvWriter.ExportWorksheet(this, options ?? CsvOptions.Default);
+
+    /// <summary>Writes the worksheet's used range to a stream as CSV or TSV.</summary>
+    public async ValueTask SaveCsvAsync(
+        Stream stream, CsvOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        CsvOptions effective = options ?? CsvOptions.Default;
+        string csv = CsvWriter.ExportWorksheet(this, effective);
+        byte[] bytes = effective.Encoding.GetBytes(csv);
+        await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+        if (!effective.LeaveOpen)
+            await stream.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Writes the worksheet's used range to a file as CSV or TSV, overwriting any existing file.</summary>
+    public async ValueTask SaveCsvAsync(
+        string path, CsvOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        var stream = new FileStream(
+            path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
+        await using (stream.ConfigureAwait(false))
+        {
+            await SaveCsvAsync(stream, (options ?? CsvOptions.Default) with { LeaveOpen = true }, cancellationToken)
+                .ConfigureAwait(false);
+        }
     }
 
     /// <summary>

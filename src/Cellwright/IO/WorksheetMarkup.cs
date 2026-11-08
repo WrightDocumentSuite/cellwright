@@ -131,6 +131,22 @@ internal sealed class WorksheetMarkup
         (ExtensionConditionalFormats is null || ExtensionConditionalFormats.HasUnsupportedRules);
 
     /// <summary>
+    /// Whether the worksheet carried source-only markup that is not rebuilt completely from the
+    /// copy model. The ordinary drawing pointer is excluded because pictures and charts receive
+    /// a fresh drawing graph; unmodelled anchors are tracked separately on the worksheet.
+    /// </summary>
+    public bool HasCopySensitiveContent =>
+        RootAttributes is not null ||
+        SheetProperties is not null || SheetPropertyChildren is not null ||
+        SheetViewAttributes is not null || SheetViewChildren is not null ||
+        SheetFormatProperties is not null || BeforeAutoFilter is not null ||
+        AfterProtection is not null || AutoFilter is not null || BeforeMerges is not null ||
+        AfterMerges is not null || ConditionalFormats is not null || DataValidations is not null ||
+        PageSetup is not null || PageSetupAttributes is not null || PageSetupProperties is not null ||
+        PrintSetup is not null || LegacyDrawing is not null ||
+        AfterLegacyDrawing is not null || TableParts is not null || Extensions is not null;
+
+    /// <summary>
     /// Stops using a semantic view that could not be trusted or safely removed. Structural edits
     /// use <see cref="RemoveExtensionConditionalFormats"/> so stale raw ranges are not saved.
     /// </summary>

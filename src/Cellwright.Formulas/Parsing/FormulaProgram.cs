@@ -20,10 +20,12 @@ internal sealed class FormulaProgram
         FunctionDefinition?[] functions,
         string[] functionNames,
         string[] localNames,
+        LambdaDefinition[] lambdas,
         bool isVolatile,
         bool dependsOnVisibility)
     {
         LocalNames = localNames;
+        Lambdas = lambdas;
         Text = text;
         Instructions = instructions;
         Numbers = numbers;
@@ -59,8 +61,11 @@ internal sealed class FormulaProgram
     /// <summary>Names as written, parallel to <see cref="Functions"/>, for faithful rendering.</summary>
     internal string[] FunctionNames { get; }
 
-    /// <summary>Names of the <c>LET</c> bindings, indexed by slot. Empty when the formula has none.</summary>
+    /// <summary>Names of the <c>LET</c> and <c>LAMBDA</c> bindings, indexed by slot. Empty when the formula has none.</summary>
     internal string[] LocalNames { get; }
+
+    /// <summary>Compiled <c>LAMBDA</c> descriptors inside this program.</summary>
+    internal LambdaDefinition[] Lambdas { get; }
 
     /// <summary>Whether the formula must be recalculated on every pass.</summary>
     public bool IsVolatile { get; }
@@ -88,6 +93,9 @@ internal sealed class FormulaProgram
     private static int StackDelta(Instruction instruction) => instruction.Code switch
     {
         OpCode.Call => 1 - instruction.ArgCount,
+        OpCode.Invoke => -instruction.ArgCount,
+        OpCode.PushLambda => 0,
+        OpCode.EndLambda => 0,
         <= OpCode.PushLocal => 1,
         OpCode.Negate or OpCode.Plus or OpCode.Percent or OpCode.Let => 0,
         _ => -1,

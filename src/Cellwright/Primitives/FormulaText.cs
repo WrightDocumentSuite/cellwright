@@ -347,7 +347,7 @@ internal static class FormulaText
     /// <summary>Edits one reference; returns whether the text has to be replaced.</summary>
     private interface IReferenceRewriter
     {
-        bool Rewrite(ref ReferenceToken token);
+        public bool Rewrite(ref ReferenceToken token);
     }
 
     private readonly struct SheetRenamer(string oldName, string newName) : IReferenceRewriter

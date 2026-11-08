@@ -435,7 +435,13 @@ internal sealed class SheetParser(
         int xf = BinaryPrimitives.ReadUInt16LittleEndian(body[4..]);
         int index = (int)BinaryPrimitives.ReadUInt32LittleEndian(body[6..]);
         CellRef cell = ReadCellRef(body);
-        SetCell(sink, cell, MakeText(globals.StringAt(index), cell, sink, accountText: false), xf);
+        CellValue textValue = MakeText(globals.StringAt(index), cell, sink, accountText: false);
+        SetCell(sink, cell, textValue, xf);
+        if (globals.RichStringAt(index) is { IsFormatted: true } rich &&
+            textValue.GetText().Length == rich.Text.Length)
+        {
+            sink.Sheet.RichStringTable[cell] = new IO.RichStringMarkup(rich.Text, Streaming.RichTextMarkup.ToMarkup(rich));
+        }
     }
 
     /// <summary>
@@ -471,7 +477,34 @@ internal sealed class SheetParser(
             ? BiffStrings.ReadUnicodeString(body, ref cursor, loadBudget)
             : BiffStrings.ReadByteString(body, ref cursor, globals.Encoding, lengthBytes: 2);
         CellRef cell = ReadCellRef(body);
-        SetCell(sink, cell, MakeText(text, cell, sink), xf);
+        CellValue textValue = MakeText(text, cell, sink);
+        SetCell(sink, cell, textValue, xf);
+
+        if (reader.RecordType == BiffRecordType.RString &&
+            globals.Version >= BiffVersion.Biff8 &&
+            cursor + 2 <= body.Length)
+        {
+            int runCount = BinaryPrimitives.ReadUInt16LittleEndian(body[cursor..]);
+            cursor += 2;
+            int available = Math.Min(runCount, (body.Length - cursor) / 4);
+            if (available > 0)
+            {
+                var runs = new (int CharPos, int FontIndex)[available];
+                for (int i = 0; i < available; i++)
+                {
+                    runs[i] = (
+                        BinaryPrimitives.ReadUInt16LittleEndian(body[cursor..]),
+                        BinaryPrimitives.ReadUInt16LittleEndian(body[(cursor + 2)..]));
+                    cursor += 4;
+                }
+
+                if (globals.BuildRichText(text, runs) is { IsFormatted: true } rich &&
+                    textValue.GetText().Length == rich.Text.Length)
+                {
+                    sink.Sheet.RichStringTable[cell] = new IO.RichStringMarkup(rich.Text, Streaming.RichTextMarkup.ToMarkup(rich));
+                }
+            }
+        }
     }
 
     private void ReadFormula(WorksheetContentSink sink, ReadOnlySpan<byte> body)

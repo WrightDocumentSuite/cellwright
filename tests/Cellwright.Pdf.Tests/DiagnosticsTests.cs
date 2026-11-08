@@ -92,16 +92,22 @@ public sealed class DiagnosticsTests
     }
 
     [Fact]
-    public void PrintedHeadingsAreSaidToBeLeftOut()
+    public void PrintedHeadingsAreDrawnWithoutDiagnostic()
     {
         Workbook book = Workbook.Create();
-        Sheet(book).PageSetup.PrintHeadings = true;
+        Worksheet sheet = Sheet(book);
+        sheet["B2"] = "Cell value";
+        sheet.PageSetup.PrintHeadings = true;
 
         using Rendered rendered = Rendered.Of(book);
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             rendered.Diagnostics,
-            warning => warning.Kind == PdfExportWarningKind.ContentSkipped && warning.Subject == "print-headings");
+            warning => warning.Subject == "print-headings");
+        Assert.Contains("A", rendered.Text(0), StringComparison.Ordinal);
+        Assert.Contains("B", rendered.Text(0), StringComparison.Ordinal);
+        Assert.Contains("1", rendered.Text(0), StringComparison.Ordinal);
+        Assert.Contains("2", rendered.Text(0), StringComparison.Ordinal);
     }
 
     [Fact]

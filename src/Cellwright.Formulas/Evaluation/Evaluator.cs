@@ -15,30 +15,54 @@ internal sealed class Evaluator
 
     /// <summary>
     /// Evaluates the program in the context's current cell, optionally as a formula copied by
-    /// the supplied row and column offsets. The immutable program remains shared; references are
-    /// shifted as value types while their instructions are executed.
+    /// the supplied row and column offsets.
     /// </summary>
     public FormulaValue Evaluate(
         FormulaProgram program, EvalContext context, int rowDelta = 0, int columnDelta = 0)
     {
         _top = 0;
-        EnsureCapacity(program.MaxStackDepth);
+        EnsureCapacity(program.MaxStackDepth + 8);
         if (_locals.Length < program.LocalNames.Length)
             _locals = new FormulaValue[program.LocalNames.Length];
 
-        foreach (Instruction instruction in program.Instructions)
-            Step(program, instruction, context, rowDelta, columnDelta);
+        Instruction[] instructions = program.Instructions;
+        for (int ip = 0; ip < instructions.Length; ip++)
+            Step(program, ref ip, context, rowDelta, columnDelta);
+
+        return _top == 1 ? _stack[0] : FormulaValue.Error(ExcelError.Value);
+    }
+
+    public FormulaValue EvaluateLambda(
+        LambdaValue lambda, ReadOnlySpan<FormulaValue> args, EvalContext context)
+    {
+        FormulaProgram program = lambda.Program;
+        _top = 0;
+        EnsureCapacity(program.MaxStackDepth + 8);
+        if (_locals.Length < program.LocalNames.Length)
+            _locals = new FormulaValue[program.LocalNames.Length];
+
+        if (lambda.CapturedLocals is { } captured)
+            captured.CopyTo(_locals.AsSpan());
+
+        int[] slots = lambda.Definition.ParameterSlots;
+        for (int i = 0; i < slots.Length; i++)
+            _locals[slots[i]] = i < args.Length ? args[i] : FormulaValue.Omitted;
+
+        int end = lambda.Definition.BodyEnd - 1;
+        for (int ip = lambda.Definition.BodyStart; ip < end; ip++)
+            Step(program, ref ip, context, 0, 0);
 
         return _top == 1 ? _stack[0] : FormulaValue.Error(ExcelError.Value);
     }
 
     private void Step(
         FormulaProgram program,
-        Instruction instruction,
+        ref int ip,
         EvalContext context,
         int rowDelta,
         int columnDelta)
     {
+        Instruction instruction = program.Instructions[ip];
         switch (instruction.Code)
         {
             case OpCode.PushNumber:
@@ -54,7 +78,7 @@ internal sealed class Evaluator
                 Push(FormulaValue.Error((ExcelError)instruction.Operand));
                 break;
             case OpCode.PushBlank:
-                Push(FormulaValue.Blank);
+                Push(FormulaValue.Omitted);
                 break;
             case OpCode.PushReference:
                 PushReference(program.References[instruction.Operand], context, rowDelta, columnDelta);
@@ -74,10 +98,13 @@ internal sealed class Evaluator
             case OpCode.StoreLocal:
                 _locals[instruction.Operand] = Pop();
                 break;
-
-            // The calculation of a LET is already on top of the stack; the marker only exists
-            // so that rendering can put the bindings back in front of it.
-            case OpCode.Let:
+            case OpCode.Let or OpCode.EndLambda:
+                break;
+            case OpCode.PushLambda:
+                PushLambda(program, instruction.Operand, ref ip);
+                break;
+            case OpCode.Invoke:
+                InvokeOnStack(instruction.ArgCount, context);
                 break;
             case OpCode.Call:
                 Call(program, instruction, context);
@@ -93,6 +120,27 @@ internal sealed class Evaluator
         }
     }
 
+    private void PushLambda(FormulaProgram program, int lambdaIndex, ref int ip)
+    {
+        FormulaValue[]? captured = program.LocalNames.Length > 0
+            ? _locals.AsSpan(0, program.LocalNames.Length).ToArray()
+            : null;
+        Push(FormulaValue.Lambda(new LambdaValue(program, lambdaIndex, captured)));
+        ip = program.Lambdas[lambdaIndex].BodyEnd - 1;
+    }
+
+    private void InvokeOnStack(int argCount, EvalContext context)
+    {
+        Span<FormulaValue> args = _stack.AsSpan(_top - argCount, argCount);
+        FormulaValue target = _stack[_top - argCount - 1];
+        FormulaValue result = target.IsLambda
+            ? context.InvokeLambda(target.AsLambda, args)
+            : target.IsError ? target : FormulaValue.Error(ExcelError.Value);
+
+        _top -= argCount + 1;
+        Push(result);
+    }
+
     private void PushReference(
         in FormulaRef reference, EvalContext context, int rowDelta, int columnDelta)
     {
@@ -100,8 +148,6 @@ internal sealed class Evaluator
             ? reference
             : reference.Shift(rowDelta, columnDelta);
 
-        // A cell of another workbook has no worksheet behind it; its cached values arrive as
-        // a plain value or array instead of a reference.
         if (shifted.IsExternal)
         {
             Push(context.ResolveExternal(shifted));
@@ -127,9 +173,18 @@ internal sealed class Evaluator
         FunctionDefinition? definition = program.Functions[instruction.Operand];
         Span<FormulaValue> args = _stack.AsSpan(_top - argCount, argCount);
 
-        FormulaValue result = definition is null
-            ? FormulaValue.Error(ExcelError.Name)
-            : Invoke(definition, args, context);
+        FormulaValue result;
+        if (definition is not null)
+        {
+            result = Invoke(definition, args, context);
+        }
+        else
+        {
+            FormulaValue named = NameResolver.Resolve(program.FunctionNames[instruction.Operand], context);
+            result = named.IsLambda
+                ? context.InvokeLambda(named.AsLambda, args)
+                : FormulaValue.Error(ExcelError.Name);
+        }
 
         _top -= argCount;
         Push(result);
@@ -139,8 +194,6 @@ internal sealed class Evaluator
     {
         if (!definition.WantsRawReferences)
         {
-            // Scalar functions see values, not geometry: references collapse through implicit
-            // intersection before the handler runs.
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i].Kind == FormulaValueKind.Reference)

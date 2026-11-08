@@ -95,7 +95,7 @@ public sealed class ThemeOracleTests
         {
             using FileStream input = File.OpenRead(path);
             using var book = new XSSFWorkbook(input);
-            NPOI.XSSF.Model.ThemesTable? themes = book.GetStylesSource()?.GetTheme();
+            NPOI.XSSF.Model.ThemesTable? themes = book.GetTheme();
             if (themes is null)
                 return null;
 

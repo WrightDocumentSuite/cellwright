@@ -43,7 +43,17 @@ internal sealed partial class CellPlacer
                         // An icon sits at the left edge, and the text starts after it rather than under it.
                         double icon = IconRoom(row, column, height);
                         var box = new CellBox(x + icon, y, width - icon, height, row, c);
-                        Draw(text, style, appearance with { Color = text.Color }, box, Tag(row, column));
+                        RichText? rich = _sheet.Cell(row, column).RichText;
+                        if (rich is { IsFormatted: true } &&
+                            style.Alignment.TextRotation == 0 &&
+                            string.Equals(text.Text, rich.Text, StringComparison.Ordinal))
+                        {
+                            DrawRich(rich, text.Alignment, style, box, Tag(row, column));
+                        }
+                        else
+                        {
+                            Draw(text, style, appearance with { Color = text.Color }, box, Tag(row, column));
+                        }
                     }
                 }
 
@@ -278,5 +288,290 @@ internal sealed partial class CellPlacer
         return rightToLeft || BidiLayout.HasRightToLeft(text)
             ? BidiLayout.ToVisualLine(text, rightToLeft)
             : text;
+    }
+
+    private readonly record struct RichSegment(string Text, TextAppearance Appearance);
+
+    private readonly record struct RichLine(
+        List<RichSegment> Segments, double Width, double Ascent, double LineHeight);
+
+    /// <summary>
+    /// Draws a cell whose text carries per-run character formatting (<see cref="Cell.RichText"/>).
+    /// Each run is drawn in its own <see cref="TextAppearance"/> while sharing a common baseline
+    /// per line and obeying the cell's horizontal/vertical alignment, wrapping, shrink-to-fit,
+    /// and overflow clipping.
+    /// </summary>
+    private void DrawRich(
+        RichText rich, HorizontalAlignment horizontal, CellStyle style, CellBox cell, TagRef? tag)
+    {
+        Alignment alignment = style.Alignment;
+        double room = CellMeasurer.Room(cell.Width, alignment);
+        List<RichLine> lines = BuildRichLines(rich, style.Font, _grid.Appearances, alignment, room);
+        if (lines.Count == 0)
+            return;
+
+        if (!alignment.WrapText && lines.Count == 1)
+        {
+            RichLine line = lines[0];
+            if (alignment.ShrinkToFit && line.Width > room)
+                line = ShrinkRichLine(line, room);
+
+            (double reachLeft, double reachRight) = Reach(cell, alignment, horizontal, line.Width);
+            double x = horizontal switch
+            {
+                HorizontalAlignment.Right => cell.Right - Padding - line.Width,
+                HorizontalAlignment.Center or HorizontalAlignment.CenterContinuous =>
+                    cell.X + ((cell.Width - line.Width) / 2),
+                _ => cell.X + Padding + (alignment.Indent * IndentStep),
+            };
+            double top = Down(alignment.Vertical, cell.Y, cell.Height, line.LineHeight);
+            PlaceRichLine(line, x, top, cell, reachLeft, reachRight, tag);
+            return;
+        }
+
+        double totalHeight = 0;
+        foreach (RichLine line in lines)
+            totalHeight += line.LineHeight;
+
+        double cursorTop = Down(alignment.Vertical, cell.Y, cell.Height, totalHeight);
+        foreach (RichLine line in lines)
+        {
+            if (cursorTop + line.LineHeight > cell.Bottom + 0.01 || cursorTop < cell.Y - 0.01)
+            {
+                cursorTop += line.LineHeight;
+                continue;
+            }
+
+            double x = horizontal switch
+            {
+                HorizontalAlignment.Right => cell.Right - Padding - line.Width,
+                HorizontalAlignment.Center or HorizontalAlignment.CenterContinuous =>
+                    cell.X + ((cell.Width - line.Width) / 2),
+                _ => cell.X + Padding + (alignment.Indent * IndentStep),
+            };
+            PlaceRichLine(line, x, cursorTop, cell, cell.X, cell.Right, tag);
+            cursorTop += line.LineHeight;
+        }
+    }
+
+    private void PlaceRichLine(
+        RichLine line,
+        double startX,
+        double lineTop,
+        CellBox cell,
+        double reachLeft,
+        double reachRight,
+        TagRef? tag)
+    {
+        double cursorX = startX;
+        foreach (RichSegment segment in line.Segments)
+        {
+            if (segment.Text.Length == 0)
+                continue;
+
+            double segWidth = segment.Appearance.Measure(segment.Text);
+            double segX = cursorX;
+            cursorX += segWidth;
+
+            string shown = segment.Text;
+            bool clipped = segX < reachLeft - 0.01 || segX + segWidth > reachRight + 0.01;
+            if (clipped)
+            {
+                (shown, segX) = Trim(shown, segment.Appearance, segX, reachLeft, reachRight);
+                segWidth = segment.Appearance.Measure(shown);
+                if (shown.Length == 0)
+                    continue;
+            }
+
+            _page.Items.Add(new TextItem
+            {
+                X = segX,
+                Y = lineTop + (line.Ascent - segment.Appearance.Ascent),
+                Text = shown,
+                Appearance = segment.Appearance,
+                Width = segWidth,
+                Height = segment.Appearance.LineHeight,
+                Clip = clipped ? (reachLeft, cell.Y, reachRight, cell.Bottom) : null,
+                Tag = tag,
+            });
+        }
+    }
+
+    private static RichLine ShrinkRichLine(RichLine line, double room)
+    {
+        var shrunk = new List<RichSegment>(line.Segments.Count);
+        double width = 0;
+        double ascent = 0;
+        double lineHeight = 0;
+        foreach (RichSegment seg in line.Segments)
+        {
+            TextAppearance scaled = Shrunk(seg.Appearance, room, line.Width);
+            shrunk.Add(new RichSegment(seg.Text, scaled));
+            width += scaled.Measure(seg.Text);
+            ascent = Math.Max(ascent, scaled.Ascent);
+            lineHeight = Math.Max(lineHeight, scaled.LineHeight);
+        }
+
+        return new RichLine(shrunk, width, ascent, lineHeight);
+    }
+
+    internal static List<(double Width, double LineHeight)> MeasureRichLines(
+        RichText rich, FontStyle defaultFont, CellAppearances appearances, Alignment alignment, double room)
+    {
+        List<RichLine> lines = BuildRichLines(rich, defaultFont, appearances, alignment, room);
+        var metrics = new List<(double Width, double LineHeight)>(lines.Count);
+        foreach (RichLine line in lines)
+            metrics.Add((line.Width, line.LineHeight));
+        return metrics;
+    }
+
+    private static List<RichLine> BuildRichLines(
+        RichText rich, FontStyle defaultFont, CellAppearances appearances, Alignment alignment, double room)
+    {
+        var paragraphs = new List<List<RichSegment>> { new() };
+        TextAppearance baseAppearance = appearances.Of(defaultFont);
+
+        foreach (RichTextRun run in rich)
+        {
+            if (run.Text.Length == 0)
+                continue;
+
+            TextAppearance runAppearance = run.Font is { } font ? appearances.Of(font) : baseAppearance;
+            string[] parts = run.Text.Split('\n');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (i > 0)
+                    paragraphs.Add([]);
+
+                string piece = parts[i].TrimEnd('\r');
+                if (piece.Length > 0)
+                    paragraphs[^1].Add(new RichSegment(Visual(piece, alignment), runAppearance));
+            }
+        }
+
+        var result = new List<RichLine>();
+        foreach (List<RichSegment> paragraph in paragraphs)
+        {
+            if (!alignment.WrapText || paragraph.Count == 0)
+            {
+                result.Add(ToRichLine(paragraph, baseAppearance));
+                continue;
+            }
+
+            WrapRichParagraph(paragraph, baseAppearance, room, result);
+        }
+
+        return result;
+    }
+
+    private static void WrapRichParagraph(
+        List<RichSegment> paragraph, TextAppearance fallback, double room, List<RichLine> output)
+    {
+        var chars = new List<(char Char, TextAppearance Appearance)>();
+        foreach (RichSegment seg in paragraph)
+        {
+            foreach (char ch in seg.Text)
+                chars.Add((ch, seg.Appearance));
+        }
+
+        int pos = 0;
+        while (pos < chars.Count)
+        {
+            int take = FitRich(chars, pos, room);
+            int end = pos + take;
+            while (end > pos && chars[end - 1].Char == ' ')
+                end--;
+
+            output.Add(SliceToRichLine(chars, pos, end, fallback));
+            pos += take;
+            while (pos < chars.Count && chars[pos].Char == ' ')
+                pos++;
+        }
+    }
+
+    private static int FitRich(List<(char Char, TextAppearance Appearance)> chars, int start, double room)
+    {
+        int remaining = chars.Count - start;
+        if (MeasureSlice(chars, start, remaining) <= room)
+            return remaining;
+
+        int lastSpace = -1;
+        for (int len = 1; len <= remaining; len++)
+        {
+            if (MeasureSlice(chars, start, len) > room)
+                return lastSpace > 0 ? lastSpace : Math.Max(1, len - 1);
+
+            if (chars[start + len - 1].Char == ' ')
+                lastSpace = len - 1;
+        }
+
+        return remaining;
+    }
+
+    private static double MeasureSlice(List<(char Char, TextAppearance Appearance)> chars, int start, int length)
+    {
+        if (length <= 0)
+            return 0;
+
+        double total = 0;
+        int i = start;
+        int end = start + length;
+        while (i < end)
+        {
+            TextAppearance current = chars[i].Appearance;
+            int runStart = i;
+            i++;
+            while (i < end && ReferenceEquals(chars[i].Appearance, current))
+                i++;
+
+            var buffer = new char[i - runStart];
+            for (int k = 0; k < buffer.Length; k++)
+                buffer[k] = chars[runStart + k].Char;
+
+            total += current.Measure(new string(buffer));
+        }
+
+        return total;
+    }
+
+    private static RichLine SliceToRichLine(
+        List<(char Char, TextAppearance Appearance)> chars, int start, int end, TextAppearance fallback)
+    {
+        var segments = new List<RichSegment>();
+        int i = start;
+        while (i < end)
+        {
+            TextAppearance current = chars[i].Appearance;
+            int runStart = i;
+            i++;
+            while (i < end && ReferenceEquals(chars[i].Appearance, current))
+                i++;
+
+            var buffer = new char[i - runStart];
+            for (int k = 0; k < buffer.Length; k++)
+                buffer[k] = chars[runStart + k].Char;
+
+            segments.Add(new RichSegment(new string(buffer), current));
+        }
+
+        return ToRichLine(segments, fallback);
+    }
+
+    private static RichLine ToRichLine(List<RichSegment> segments, TextAppearance fallback)
+    {
+        if (segments.Count == 0)
+            return new RichLine(segments, 0, fallback.Ascent, fallback.LineHeight);
+
+        double width = 0;
+        double ascent = 0;
+        double lineHeight = 0;
+        foreach (RichSegment seg in segments)
+        {
+            width += seg.Appearance.Measure(seg.Text);
+            ascent = Math.Max(ascent, seg.Appearance.Ascent);
+            lineHeight = Math.Max(lineHeight, seg.Appearance.LineHeight);
+        }
+
+        return new RichLine(segments, width, ascent, lineHeight);
     }
 }

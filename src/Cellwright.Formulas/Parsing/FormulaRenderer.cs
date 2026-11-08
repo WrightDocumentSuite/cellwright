@@ -38,6 +38,14 @@ internal static class FormulaRenderer
             case OpCode.Let:
                 RenderLet(stack, bindings!, instruction.ArgCount);
                 return;
+            case OpCode.PushLambda:
+                return;
+            case OpCode.EndLambda:
+                RenderLambda(program, stack, instruction.Operand);
+                return;
+            case OpCode.Invoke:
+                RenderInvoke(instruction, stack);
+                return;
 
             case OpCode.PushNumber:
                 Push(stack, program.Numbers[instruction.Operand].ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -100,6 +108,33 @@ internal static class FormulaRenderer
 
         bindings.RemoveRange(first, count);
         Push(stack, builder.Append(calculation.Text).Append(')').ToString());
+    }
+
+    private static void RenderLambda(FormulaProgram program, List<Fragment> stack, int lambdaIndex)
+    {
+        Fragment body = Pop(stack);
+        LambdaDefinition def = program.Lambdas[lambdaIndex];
+        var builder = new StringBuilder("LAMBDA(");
+        foreach (int slot in def.ParameterSlots)
+            builder.Append(program.LocalNames[slot]).Append(',');
+        Push(stack, builder.Append(body.Text).Append(')').ToString());
+    }
+
+    private static void RenderInvoke(Instruction instruction, List<Fragment> stack)
+    {
+        int argCount = instruction.ArgCount;
+        int first = stack.Count - argCount;
+        var argsBuilder = new StringBuilder("(");
+        for (int i = 0; i < argCount; i++)
+        {
+            if (i > 0)
+                argsBuilder.Append(',');
+            argsBuilder.Append(stack[first + i].Text);
+        }
+
+        stack.RemoveRange(first, argCount);
+        Fragment target = Pop(stack);
+        Push(stack, target.Text + argsBuilder.Append(')').ToString());
     }
 
     private static void RenderCall(FormulaProgram program, Instruction instruction, List<Fragment> stack)

@@ -226,6 +226,61 @@ public sealed class Workbook
         return ToMarkdown(options).SaveAsync(directoryPath, cancellationToken);
     }
 
+    /// <summary>Loads a single-sheet workbook from a CSV or TSV stream.</summary>
+    public static async ValueTask<Workbook> LoadCsvAsync(
+        Stream stream, CsvOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        CsvOptions effective = options ?? CsvOptions.Default;
+        effective.Validate();
+
+        var workbook = new Workbook();
+        Worksheet sheet = workbook.Sheets.Add(effective.SheetName);
+        await foreach (RowData row in CsvReader.ReadRowsAsync(stream, effective, cancellationToken).ConfigureAwait(false))
+            PopulateRow(sheet, row);
+        return workbook;
+    }
+
+    /// <summary>Loads a single-sheet workbook from a CSV or TSV file.</summary>
+    public static async ValueTask<Workbook> LoadCsvAsync(
+        string path, CsvOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        CsvOptions effective = options ?? CsvOptions.Default;
+        effective.Validate();
+
+        var workbook = new Workbook();
+        Worksheet sheet = workbook.Sheets.Add(effective.SheetName);
+        await foreach (RowData row in CsvReader.ReadRowsAsync(path, effective, cancellationToken).ConfigureAwait(false))
+            PopulateRow(sheet, row);
+        return workbook;
+    }
+
+    /// <summary>Parses CSV or TSV text into a single-sheet workbook.</summary>
+    public static Workbook ParseCsv(string csvText, CsvOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(csvText);
+        CsvOptions effective = options ?? CsvOptions.Default;
+        effective.Validate();
+
+        var workbook = new Workbook();
+        Worksheet sheet = workbook.Sheets.Add(effective.SheetName);
+        using var reader = new StringReader(csvText);
+        foreach (RowData row in CsvReader.ReadRows(reader, effective))
+            PopulateRow(sheet, row);
+        return workbook;
+    }
+
+    private static void PopulateRow(Worksheet sheet, in RowData row)
+    {
+        ReadOnlySpan<CellValue> cells = row.Cells;
+        for (int col = 0; col < cells.Length; col++)
+        {
+            if (!cells[col].IsBlank)
+                sheet.Values.Set(row.RowNumber, col + 1, cells[col]);
+        }
+    }
+
     internal void AttachDiagnostics(LoadDiagnostics diagnostics) => LoadDiagnostics = diagnostics;
 
     internal void SetDateSystem(ExcelDateSystem system) => DateSystem = system;

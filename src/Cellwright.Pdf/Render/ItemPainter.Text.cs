@@ -72,11 +72,20 @@ internal sealed partial class ItemPainter
             _canvas.Transform(PdfMatrix.Translation(item.X + item.Height - page, page - item.Y));
             _canvas.Transform(PdfMatrix.Rotation(-90));
         }
-        else
+        else if (item.Rotation == 270)
         {
             // Read upwards, glyph tops to the left: anticlockwise, from the strip's bottom.
             _canvas.Transform(PdfMatrix.Translation(item.X + page, page - item.Y - item.Width));
             _canvas.Transform(PdfMatrix.Rotation(90));
+        }
+        else
+        {
+            // Arbitrary angle: item.X and item.Y are the centre of the cell. Rotate around that
+            // centre and shift the upright frame so the text box's own centre sits at the pivot.
+            double pdfAngle = -item.Rotation;
+            _canvas.Transform(PdfMatrix.Translation(item.X, _geometry.ToPdfY(item.Y)));
+            _canvas.Transform(PdfMatrix.Rotation(pdfAngle));
+            _canvas.Transform(PdfMatrix.Translation(-item.Width / 2, (item.Height / 2) - page));
         }
 
         PaintUpright(item, 0, item.Appearance.Ascent);

@@ -1,3 +1,5 @@
+using Cellwright.Tests.Shared;
+
 namespace Cellwright.Xls.Tests;
 
 /// <summary>
@@ -34,7 +36,8 @@ internal static class XlsCorpus
     /// like <c>EmptyZipFile.xlsb</c> fails as a package long before any record is read.
     /// </remarks>
     public static bool IsUnreadable(Exception exception) => exception is
-        XlsFormatException or XlsxFormatException or InvalidDataException or IOException or NotSupportedException;
+        XlsFormatException or XlsxFormatException or DocumentLoadLimitException or
+        InvalidDataException or IOException or NotSupportedException;
 
     private static string[] Discover(string pattern)
     {
@@ -44,21 +47,13 @@ internal static class XlsCorpus
 
         var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
         return [.. Directory.EnumerateFiles(root, pattern, options)
-            .Where(static path => !path.Contains("Cellwright", StringComparison.OrdinalIgnoreCase))
+            .Where(CorpusRoot.Includes)
             .OrderBy(static path => path, StringComparer.Ordinal)];
     }
 
     /// <summary>Walks up from the test binaries looking for the folder holding the sibling repositories.</summary>
     private static string? FindCorpusRoot()
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (Directory.Exists(Path.Combine(directory.FullName, "ExcelDataReader-3.9.0")))
-                return directory.FullName;
-            directory = directory.Parent;
-        }
-
-        return null;
+        return CorpusRoot.Find("ExcelDataReader-3.9.0");
     }
 }

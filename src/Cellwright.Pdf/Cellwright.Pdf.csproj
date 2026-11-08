@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Cellwright\Cellwright.csproj" />
     <PackageReference Include="Inkwright" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" PrivateAssets="all" />
   </ItemGroup>
 
 </Project>

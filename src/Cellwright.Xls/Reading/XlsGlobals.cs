@@ -84,6 +84,12 @@ internal sealed class XlsGlobals
     /// <summary>The shared-string table, indexed by LabelSst.</summary>
     public string[] SharedStrings { get; set; } = [];
 
+    /// <summary>Rich-text runs parallel to <see cref="SharedStrings"/>, when an entry carries character formatting.</summary>
+    public RichText?[] SharedRichStrings { get; set; } = [];
+
+    /// <summary>Resolved workbook fonts in table order.</summary>
+    public List<FontStyle> Fonts { get; } = [];
+
     /// <summary>Cell style handles by XF index, mapped into the workbook's pool.</summary>
     public List<StyleId> CellFormats { get; } = [];
 
@@ -143,6 +149,47 @@ internal sealed class XlsGlobals
     /// <summary>Looks up a shared string, tolerating an index the file got wrong.</summary>
     public string StringAt(int index) =>
         (uint)index < (uint)SharedStrings.Length ? SharedStrings[index] : "";
+
+    /// <summary>Looks up the rich-text runs of a shared string, or <see langword="null"/> when plain.</summary>
+    public RichText? RichStringAt(int index) =>
+        (uint)index < (uint)SharedRichStrings.Length ? SharedRichStrings[index] : null;
+
+    /// <summary>Resolves a font index from the workbook's font table.</summary>
+    public FontStyle FontOf(int fontIndex)
+    {
+        int slot = Version != BiffVersion.Biff12 && fontIndex > 4 ? fontIndex - 1 : fontIndex;
+        return (uint)slot < (uint)Fonts.Count ? Fonts[slot] : FontStyle.Default;
+    }
+
+    /// <summary>Builds a <see cref="RichText"/> value from character-offset formatting runs.</summary>
+    public RichText? BuildRichText(string text, ReadOnlySpan<(int CharPos, int FontIndex)> runs)
+    {
+        if (runs.IsEmpty || text.Length == 0)
+            return null;
+
+        var result = new List<RichTextRun>(runs.Length + 1);
+        int firstStart = Math.Clamp(runs[0].CharPos, 0, text.Length);
+        if (firstStart > 0)
+            result.Add(new RichTextRun(text[..firstStart]));
+
+        for (int i = 0; i < runs.Length; i++)
+        {
+            int start = Math.Clamp(runs[i].CharPos, 0, text.Length);
+            int end = i + 1 < runs.Length
+                ? Math.Clamp(runs[i + 1].CharPos, start, text.Length)
+                : text.Length;
+            if (end <= start)
+                continue;
+
+            result.Add(new RichTextRun(text[start..end], FontOf(runs[i].FontIndex)));
+        }
+
+        if (result.Count == 0)
+            return null;
+
+        var rich = new RichText(result);
+        return rich.IsFormatted ? rich : null;
+    }
 }
 
 /// <summary>The BIFF versions this library can read.</summary>

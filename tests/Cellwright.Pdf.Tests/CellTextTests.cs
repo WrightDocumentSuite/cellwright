@@ -290,18 +290,53 @@ public sealed class CellTextTests
     }
 
     [Fact]
-    public void ALinkInsideTheWorkbookIsSaidToBeInert()
+    public void ALinkInsideTheWorkbookPointsToTheTargetPageAndUnprintedTargetIsDiagnosed()
     {
         Workbook book = Workbook.Create();
-        Worksheet sheet = Sheet(book);
-        sheet["A1"] = "Elsewhere";
-        sheet.Hyperlinks.Add(Hyperlink.ToLocation(RangeRef.Parse("A1"), "Sheet1!B2"));
+        Worksheet sheet1 = Sheet(book);
+        sheet1["A1"] = "Go to Sheet2";
+        sheet1["A2"] = "Go to Hidden";
+        Worksheet sheet2 = book.Sheets.Add("Sheet2");
+        sheet2["B2"] = "Destination";
+        Worksheet hidden = book.Sheets.Add("Hidden");
+        hidden["A1"] = "Not printed";
+        hidden.IsHidden = true;
+
+        sheet1.Hyperlinks.Add(Hyperlink.ToLocation(RangeRef.Parse("A1"), "Sheet2!B2"));
+        sheet1.Hyperlinks.Add(Hyperlink.ToLocation(RangeRef.Parse("A2"), "Hidden!A1"));
 
         using Rendered rendered = Rendered.Of(book);
+
+        Inkwright.Annotations.PdfLinkAnnotation link = Assert.Single(
+            rendered.Document.Pages[0].Annotations.OfType<Inkwright.Annotations.PdfLinkAnnotation>());
+        Assert.Equal(1, link.DestinationPageIndex);
 
         Assert.Contains(
             rendered.Diagnostics,
             warning => warning.Kind == PdfExportWarningKind.ContentSkipped && warning.Subject == "internal-link");
+    }
+
+    [Fact]
+    public void DiagonalTextIsDrawnAtItsStatedAngleWithoutApproximationDiagnostic()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = Sheet(book);
+        sheet["A1"] = "Diagonal";
+        sheet.Cell("A1").SetStyle(CellStyle.Default with
+        {
+            Alignment = Alignment.Default with { TextRotation = 45 },
+        });
+        sheet.Column("A").SetWidth(20);
+        sheet.Row(1).SetHeight(60);
+
+        using Rendered rendered = Rendered.Of(book);
+        Assert.DoesNotContain(rendered.Diagnostics, warning => warning.Subject == "rotation");
+
+        IReadOnlyList<PdfLetter> letters = rendered.Letters();
+        Assert.True(letters.Count >= 4);
+        double spreadX = letters.Max(l => l.Origin.X) - letters.Min(l => l.Origin.X);
+        double spreadY = letters.Max(l => l.Origin.Y) - letters.Min(l => l.Origin.Y);
+        Assert.True(spreadX > 5 && spreadY > 5, $"Expected diagonal spread in both X ({spreadX:0.0}) and Y ({spreadY:0.0}).");
     }
 
     [Fact]
@@ -317,6 +352,32 @@ public sealed class CellTextTests
 
         using Rendered rendered = Rendered.Of(book);
 
+        Assert.Contains("\nS\n", rendered.Content(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RichTextRunsAreDrawnWithTheirOwnFontsAndColours()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = Sheet(book);
+        FontStyle baseFont = sheet.Cell("A1").StyleValue.Font;
+        FontStyle redBold = baseFont with
+        {
+            Bold = true,
+            Color = ExcelColor.FromRgb(0xFF, 0x00, 0x00),
+            Underline = UnderlineStyle.Single,
+        };
+
+        sheet.Cell("A1").SetRichText(RichText.Empty
+            .Append("Total: ")
+            .Append("42", redBold));
+        sheet.Column("A").SetWidth(20);
+
+        using Rendered rendered = Rendered.Of(book);
+
+        Assert.Contains("Total: 42", rendered.Text(0), StringComparison.Ordinal);
+        // The second run sets a red fill colour (1 0 0 rg) and draws an underline stroke (S).
+        Assert.Contains("1 0 0 rg", rendered.Content(), StringComparison.Ordinal);
         Assert.Contains("\nS\n", rendered.Content(), StringComparison.Ordinal);
     }
 }

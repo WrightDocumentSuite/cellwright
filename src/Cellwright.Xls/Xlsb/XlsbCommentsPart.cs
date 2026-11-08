@@ -30,11 +30,11 @@ internal static class XlsbCommentsPart
             switch (reader.RecordType)
             {
                 case Biff12RecordType.CommentAuthor:
-                {
-                    int offset = 0;
-                    authors.Add(Biff12Values.ReadString(body, ref offset));
-                    break;
-                }
+                    {
+                        int offset = 0;
+                        authors.Add(Biff12Values.ReadString(body, ref offset));
+                        break;
+                    }
 
                 // The note states which cell it belongs to and who wrote it; its text arrives
                 // in the record that follows.
@@ -47,13 +47,13 @@ internal static class XlsbCommentsPart
                     break;
 
                 case Biff12RecordType.CommentText when inComment:
-                {
-                    string text = XlsbStringTable.ReadRichString(body);
-                    string? author = (uint)authorIndex < (uint)authors.Count ? authors[authorIndex] : null;
-                    sheet.Comments.Add(cell, text, string.IsNullOrEmpty(author) ? null : author);
-                    inComment = false;
-                    break;
-                }
+                    {
+                        string text = XlsbStringTable.ReadRichString(body);
+                        string? author = (uint)authorIndex < (uint)authors.Count ? authors[authorIndex] : null;
+                        sheet.Comments.Add(cell, text, string.IsNullOrEmpty(author) ? null : author);
+                        inComment = false;
+                        break;
+                    }
 
                 case Biff12RecordType.EndComment when inComment:
                     warn(new WorkbookWarning(

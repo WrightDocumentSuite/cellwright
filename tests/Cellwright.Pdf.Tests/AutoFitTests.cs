@@ -138,6 +138,72 @@ public sealed class AutoFitTests
     }
 
     [Fact]
+    public void AMergedCellCanOptInToSizingItsRow()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = Sheet(book);
+        sheet["A1"] = "A long merged field that has to wrap across several lines to remain visible";
+        sheet.Cell("A1").SetStyle(
+            CellStyle.Default with { Alignment = Alignment.Default with { WrapText = true } });
+        sheet.Column("A").SetWidth(7);
+        sheet.Column("B").SetWidth(7);
+        sheet.Merge(RangeRef.Parse("A1:B1"));
+
+        sheet.AutoFitRows();
+        Assert.Null(sheet.Row(1).Height);
+
+        sheet.AutoFitRows(new AutoFitOptions { IncludeMergedCells = true });
+
+        Assert.NotNull(sheet.Row(1).Height);
+        Assert.True(sheet.Row(1).Height > 15);
+    }
+
+    [Fact]
+    public void AHorizontalMergeIsMeasuredAtItsCombinedWidth()
+    {
+        const string Text = "A long merged field whose wrapping changes with the width of the merged range";
+
+        Workbook narrowBook = Workbook.Create();
+        Worksheet narrow = Sheet(narrowBook);
+        narrow["A1"] = Text;
+        narrow.Cell("A1").SetStyle(
+            CellStyle.Default with { Alignment = Alignment.Default with { WrapText = true } });
+        narrow.Column("A").SetWidth(7);
+        narrow.Column("B").SetWidth(7);
+        narrow.Merge(RangeRef.Parse("A1:B1"));
+        narrow.AutoFitRows(new AutoFitOptions { IncludeMergedCells = true });
+
+        Workbook wideBook = Workbook.Create();
+        Worksheet wide = Sheet(wideBook);
+        wide["A1"] = Text;
+        wide.Cell("A1").SetStyle(
+            CellStyle.Default with { Alignment = Alignment.Default with { WrapText = true } });
+        for (int column = 1; column <= 4; column++)
+            wide.Column(column).SetWidth(7);
+        wide.Merge(RangeRef.Parse("A1:D1"));
+        wide.AutoFitRows(new AutoFitOptions { IncludeMergedCells = true });
+
+        Assert.True(narrow.Row(1).Height > wide.Row(1).Height);
+    }
+
+    [Fact]
+    public void AMultiRowMergeGrowsOnlyWhenItsCombinedHeightIsTooShort()
+    {
+        Workbook book = Workbook.Create();
+        Worksheet sheet = Sheet(book);
+        sheet["A1"] = new string('m', 180);
+        sheet.Cell("A1").SetStyle(
+            CellStyle.Default with { Alignment = Alignment.Default with { WrapText = true } });
+        sheet.Column("A").SetWidth(6);
+        sheet.Merge(RangeRef.Parse("A1:A2"));
+
+        sheet.AutoFitRows(new AutoFitOptions { IncludeMergedCells = true });
+
+        double total = (sheet.Row(1).Height ?? 15) + (sheet.Row(2).Height ?? 15);
+        Assert.True(total > 30);
+    }
+
+    [Fact]
     public void AHiddenRowDoesNotSizeAnything()
     {
         Workbook book = Workbook.Create();

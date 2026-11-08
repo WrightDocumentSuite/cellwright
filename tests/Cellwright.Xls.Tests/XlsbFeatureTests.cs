@@ -124,6 +124,84 @@ public sealed class XlsbFeatureTests
             rule.ColorScale!.Colors);
     }
 
+    [Fact]
+    public void XlsbRichStringsKeepTheirFormattingRunsFromSstAndInlineCells()
+    {
+        var globals = new XlsGlobals { Version = BiffVersion.Biff12 };
+        globals.Fonts.Add(FontStyle.Default);
+        globals.Fonts.Add(FontStyle.Default with { Bold = true, Name = "Calibri", Size = 12 });
+        globals.Fonts.Add(FontStyle.Default with { Italic = true, Underline = UnderlineStyle.Single });
+
+        byte[] sstBytes = new Biff12Builder()
+            .Record(
+                Biff12RecordType.SstItem,
+                new Biff12Builder.Body()
+                    .Byte(0x01)         // fRichStr = 1
+                    .Text("Hello World")
+                    .UInt32(2)          // 2 formatting runs
+                    .UInt16(0).UInt16(1)
+                    .UInt16(6).UInt16(2)
+                    .ToArray())
+            .ToArray();
+        XlsbStringTable.Read(sstBytes, globals, cancellationToken: TestContext.Current.CancellationToken);
+
+        byte[] sheetBytes = new Biff12Builder()
+            .Record(Biff12Records.BeginSheetData)
+            .Record(
+                Biff12RecordType.RowHdr,
+                new Biff12Builder.Body()
+                    .UInt32(0)          // row 0 -> row 1
+                    .UInt32(0)          // styleIndex
+                    .UInt16(300)        // height
+                    .Byte(0).Byte(0)
+                    .UInt32(0)
+                    .ToArray())
+            .Record(
+                Biff12RecordType.CellIsst,
+                new Biff12Builder.Body()
+                    .UInt32(0)          // col 0 -> A1
+                    .UInt32(0)          // styleIndex
+                    .UInt32(0)          // SST index 0
+                    .ToArray())
+            .Record(
+                Biff12RecordType.CellRString,
+                new Biff12Builder.Body()
+                    .UInt32(1)          // col 1 -> B1
+                    .UInt32(0)          // styleIndex
+                    .Byte(0x01)         // fRichStr = 1
+                    .Text("Foo Bar")
+                    .UInt32(1)          // 1 formatting run starting at index 4
+                    .UInt16(4).UInt16(1)
+                    .ToArray())
+            .Record(Biff12Records.EndSheetData)
+            .ToArray();
+
+        Workbook workbook = Workbook.Create();
+        Worksheet sheet = workbook.Sheets.Add("Sheet1");
+        var sink = new WorksheetContentSink(sheet, [], [], preserveMarkup: false, static _ => { });
+        var decoder = new PtgDecoder(globals, ["Sheet1"]);
+        new XlsbSheetParser(globals, decoder, 0, static _ => { }, cancellationToken: TestContext.Current.CancellationToken)
+            .Parse(sheetBytes, sink);
+
+        RichText? a1Rich = sheet.Cell("A1").RichText;
+        Assert.NotNull(a1Rich);
+        Assert.Equal("Hello World", a1Rich.Text);
+        Assert.Equal(2, a1Rich.Count);
+        Assert.Equal("Hello ", a1Rich[0].Text);
+        Assert.True(a1Rich[0].Font?.Bold);
+        Assert.Equal("World", a1Rich[1].Text);
+        Assert.True(a1Rich[1].Font?.Italic);
+
+        RichText? b1Rich = sheet.Cell("B1").RichText;
+        Assert.NotNull(b1Rich);
+        Assert.Equal("Foo Bar", b1Rich.Text);
+        Assert.Equal(2, b1Rich.Count);
+        Assert.Equal("Foo ", b1Rich[0].Text);
+        Assert.Null(b1Rich[0].Font);
+        Assert.Equal("Bar", b1Rich[1].Text);
+        Assert.True(b1Rich[1].Font?.Bold);
+    }
+
     /// <summary>A data bar: length limits and the show flag, two stops, one color (2.4.43).</summary>
     [Fact]
     public void ADataBarKeepsItsStopsAndColor()

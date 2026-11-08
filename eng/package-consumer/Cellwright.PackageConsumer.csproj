@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Cellwright.PackageConsumer</RootNamespace>
+    <!-- This consumer intentionally supplies one dynamically generated package-set version. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <CellwrightPackageVersion Condition="'$(CellwrightPackageVersion)' == ''">0.0.0-package-version-required</CellwrightPackageVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Exact references ensure this gate consumes only the package set it just built. -->
+    <PackageReference Include="Cellwright" Version="[$(CellwrightPackageVersion)]" />
+    <PackageReference Include="Cellwright.Formulas" Version="[$(CellwrightPackageVersion)]" />
+    <PackageReference Include="Cellwright.Mapping" Version="[$(CellwrightPackageVersion)]" />
+    <PackageReference Include="Cellwright.Pdf" Version="[$(CellwrightPackageVersion)]" />
+    <PackageReference Include="Cellwright.Xls" Version="[$(CellwrightPackageVersion)]" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

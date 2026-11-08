@@ -17,6 +17,7 @@ internal sealed class FormulaProgramBuilder
     private readonly List<FunctionDefinition?> _functions = [];
     private readonly List<string> _functionNames = [];
     private readonly List<string> _localNames = [];
+    private readonly List<LambdaDefinition> _lambdas = [];
     private readonly Dictionary<string, int> _stringIndex = new(StringComparer.Ordinal);
 
     public bool IsVolatile { get; private set; }
@@ -37,6 +38,26 @@ internal sealed class FormulaProgramBuilder
     /// <summary>Emits the marker that closes a <c>LET</c> with the given number of bindings.</summary>
     public void EmitLet(int bindings) =>
         _instructions.Add(new Instruction(OpCode.Let, checked((byte)bindings), 0));
+
+    /// <summary>Starts a <c>LAMBDA</c> definition and emits <see cref="OpCode.PushLambda"/>.</summary>
+    public int BeginLambda(int[] parameterSlots)
+    {
+        int index = _lambdas.Count;
+        _instructions.Add(new Instruction(OpCode.PushLambda, index));
+        _lambdas.Add(new LambdaDefinition(parameterSlots, _instructions.Count));
+        return index;
+    }
+
+    /// <summary>Closes a <c>LAMBDA</c> definition and records its end instruction index.</summary>
+    public void EndLambda(int lambdaIndex)
+    {
+        _instructions.Add(new Instruction(OpCode.EndLambda, lambdaIndex));
+        _lambdas[lambdaIndex].BodyEnd = _instructions.Count;
+    }
+
+    /// <summary>Emits an invocation of a callable value on the stack.</summary>
+    public void EmitInvoke(int argCount) =>
+        _instructions.Add(new Instruction(OpCode.Invoke, checked((byte)argCount), 0));
 
     public void EmitNumber(double value)
     {
@@ -123,6 +144,7 @@ internal sealed class FormulaProgramBuilder
         [.. _functions],
         [.. _functionNames],
         [.. _localNames],
+        [.. _lambdas],
         IsVolatile,
         DependsOnVisibility);
 }

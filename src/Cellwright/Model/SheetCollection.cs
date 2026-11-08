@@ -83,28 +83,63 @@ public sealed class SheetCollection : IReadOnlyList<Worksheet>
     /// <param name="sheet">Sheet to duplicate; it must belong to this workbook.</param>
     /// <param name="newName">Name for the copy; it must not be in use.</param>
     /// <remarks>
-    /// Cells, styles, formulas, layout, notes, links, rules, print settings and protection are
-    /// all copied. What the copy does not get is the part of the source that only lived in the
-    /// file it was loaded from — drawings, pictures and anything else the model carries as
-    /// untouched markup, which belongs to one sheet part and cannot be in two.
+    /// Cells, styles, formulas, layout, notes, links, rules, print settings, protection,
+    /// pictures and charts are all copied. Explicit references to the source sheet inside the
+    /// copied content are retargeted to the new sheet. Opaque worksheet markup and unmodelled
+    /// drawing objects cannot be duplicated safely; any such omission is reported through
+    /// <see cref="Workbook.OnWarning"/>. Use
+    /// <see cref="Copy(Worksheet, string, SheetCopyOptions)"/> to receive the same diagnostics
+    /// directly.
     /// </remarks>
     public Worksheet Copy(Worksheet sheet, string newName)
+        => CopyCore(sheet, newName, SheetCopyOptions.Default).Worksheet;
+
+    /// <summary>
+    /// Duplicates a sheet and returns both the new sheet and diagnostics for source-only content
+    /// that could not be copied safely.
+    /// </summary>
+    /// <param name="sheet">Sheet to duplicate; it must belong to this workbook.</param>
+    /// <param name="newName">Name for the copy; it must not be in use.</param>
+    /// <param name="options">Reference-retargeting and diagnostic callback options.</param>
+    public SheetCopyResult Copy(Worksheet sheet, string newName, SheetCopyOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return CopyCore(sheet, newName, options);
+    }
+
+    private SheetCopyResult CopyCore(Worksheet sheet, string newName, SheetCopyOptions options)
     {
         ArgumentNullException.ThrowIfNull(sheet);
         int from = _sheets.IndexOf(sheet);
         if (from < 0)
             throw new ArgumentException($"Sheet '{sheet.Name}' does not belong to this workbook.", nameof(sheet));
 
+        var warnings = new List<WorkbookWarning>();
+        void Warn(WorkbookWarning warning)
+        {
+            warnings.Add(warning);
+            options.OnWarning?.Invoke(warning);
+            if (options.OnWarning != _workbook.OnWarning)
+                _workbook.OnWarning?.Invoke(warning);
+        }
+
         Worksheet copy = Add(newName);
-        WorksheetCopier.Fill(sheet, copy);
+        WorksheetCopier.Fill(sheet, copy, options, Warn);
         Move(copy, from + 1);
-        return copy;
+        return new SheetCopyResult(copy, warnings);
     }
 
     /// <summary>Duplicates a sheet found by name.</summary>
     /// <param name="name">Name of the sheet to duplicate.</param>
     /// <param name="newName">Name for the copy; it must not be in use.</param>
     public Worksheet Copy(string name, string newName) => Copy(this[name], newName);
+
+    /// <summary>Duplicates a sheet found by name and returns copy diagnostics.</summary>
+    /// <param name="name">Name of the sheet to duplicate.</param>
+    /// <param name="newName">Name for the copy; it must not be in use.</param>
+    /// <param name="options">Reference-retargeting and diagnostic callback options.</param>
+    public SheetCopyResult Copy(string name, string newName, SheetCopyOptions options) =>
+        Copy(this[name], newName, options);
 
     /// <summary>Finds a sheet by its stable identifier, or <see langword="null"/> when removed.</summary>
     internal Worksheet? FindById(int id)
@@ -138,4 +173,46 @@ public sealed class SheetCollection : IReadOnlyList<Worksheet>
     public IEnumerator<Worksheet> GetEnumerator() => _sheets.GetEnumerator();
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+}
+
+/// <summary>Controls how a worksheet copy is made and where its diagnostics are sent.</summary>
+public sealed record SheetCopyOptions
+{
+    /// <summary>Default copy behaviour.</summary>
+    public static SheetCopyOptions Default { get; } = new();
+
+    /// <summary>
+    /// Whether formulas, validation and conditional-format formulas, internal hyperlinks and
+    /// chart series that explicitly name the source sheet should name the copy instead.
+    /// </summary>
+    public bool RetargetSelfReferences { get; init; } = true;
+
+    /// <summary>
+    /// Receives stable, machine-readable warnings while the copy is made. The warnings are also
+    /// returned in <see cref="SheetCopyResult.Warnings"/> and sent to
+    /// <see cref="Workbook.OnWarning"/>.
+    /// </summary>
+    public Action<WorkbookWarning>? OnWarning { get; init; }
+}
+
+/// <summary>A copied worksheet together with any fidelity diagnostics produced while copying it.</summary>
+public sealed class SheetCopyResult
+{
+    internal SheetCopyResult(Worksheet worksheet, List<WorkbookWarning> warnings)
+    {
+        Worksheet = worksheet;
+        Warnings = warnings.Count == 0 ? [] : warnings.ToArray();
+    }
+
+    /// <summary>The new worksheet.</summary>
+    public Worksheet Worksheet { get; }
+
+    /// <summary>
+    /// Source-only content that could not be represented on the copy. Warning codes are stable
+    /// and suitable for automated policy checks.
+    /// </summary>
+    public IReadOnlyList<WorkbookWarning> Warnings { get; }
+
+    /// <summary>Whether copying reported any fidelity limitation.</summary>
+    public bool HasWarnings => Warnings.Count > 0;
 }

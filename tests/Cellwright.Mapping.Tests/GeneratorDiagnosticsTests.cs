@@ -39,8 +39,27 @@ public sealed class GeneratorDiagnosticsTests
             public record NotPartial(int Id);
             """);
 
-        Assert.Contains(diagnostics, d => d.Id == "CWM001");
+        Diagnostic diag = Assert.Single(diagnostics, d => d.Id == "CWM001");
+        Assert.NotEqual(Location.None, diag.Location);
         Assert.Equal(0, generated);
+    }
+
+    [Fact]
+    public void NestedPartialType_GeneratesSchemaWithoutDiagnostics()
+    {
+        (Diagnostic[] diagnostics, int generated) = RunGenerator(
+            """
+            using Cellwright.Mapping;
+
+            public static partial class Outer
+            {
+                [ExcelRow]
+                public partial record NestedGood(int Id, string @event);
+            }
+            """);
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(1, generated);
     }
 
     [Fact]

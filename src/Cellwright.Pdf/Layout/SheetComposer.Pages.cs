@@ -59,13 +59,25 @@ internal sealed partial class SheetComposer
     /// </summary>
     private (List<Band> Columns, List<Band> Rows) Bands(SheetPlan plan, GridMeasurer grid, double scale)
     {
-        double width = (_geometry.ContentWidth / scale) - Titles(plan.TitleColumns, grid, horizontal: true);
-        double height = (_geometry.ContentHeight / scale) - Titles(plan.TitleRows, grid, horizontal: false);
+        double headingWidth = _setup.PrintHeadings ? RowHeadingBandWidth(plan, grid) : 0;
+        double headingHeight = _setup.PrintHeadings ? ColumnHeadingBandHeight(grid) : 0;
+        double width = (_geometry.ContentWidth / scale) - headingWidth - Titles(plan.TitleColumns, grid, horizontal: true);
+        double height = (_geometry.ContentHeight / scale) - headingHeight - Titles(plan.TitleRows, grid, horizontal: false);
 
         return (
             Split(plan.Columns, index => grid.WidthAt(index), width, _setup.ColumnBreaks),
             Split(plan.Rows, index => grid.HeightAt(index), height, _setup.RowBreaks));
     }
+
+    private static double RowHeadingBandWidth(SheetPlan plan, GridMeasurer grid)
+    {
+        int maxRow = plan.Rows.Length > 0 ? plan.Rows[^1] : 1;
+        string widest = maxRow.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return Math.Max(22.0, grid.Appearances.Standard.Measure(widest) + 10.0);
+    }
+
+    private static double ColumnHeadingBandHeight(GridMeasurer grid) =>
+        Math.Max(SheetUnits.DefaultRowHeight, grid.Appearances.Standard.LineHeight + 4.0);
 
     /// <summary>How much room the repeated titles take on every page of a band.</summary>
     private static double Titles(int[] titles, GridMeasurer grid, bool horizontal)

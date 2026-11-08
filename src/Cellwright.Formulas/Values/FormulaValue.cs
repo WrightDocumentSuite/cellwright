@@ -11,21 +11,26 @@ public enum FormulaValueKind : byte
 
     /// <summary>An in-memory rectangle of values.</summary>
     Array,
+
+    /// <summary>A callable <c>LAMBDA</c> closure.</summary>
+    Lambda,
 }
 
 /// <summary>
-/// A value flowing through the evaluator: a scalar, a worksheet reference or an array.
+/// A value flowing through the evaluator: a scalar, a worksheet reference, an array, or a lambda.
 /// Scalars reuse <see cref="CellValue"/>, so numbers and dates cost no allocation.
 /// </summary>
 public readonly struct FormulaValue
 {
+    private static readonly object OmittedSentinel = new();
+
     private readonly CellValue _scalar;
     private readonly object? _payload;
 
-    private FormulaValue(CellValue scalar)
+    private FormulaValue(CellValue scalar, object? payload = null)
     {
         _scalar = scalar;
-        _payload = null;
+        _payload = payload;
         Kind = FormulaValueKind.Scalar;
     }
 
@@ -41,6 +46,9 @@ public readonly struct FormulaValue
 
     /// <summary>The blank value.</summary>
     public static FormulaValue Blank => default;
+
+    /// <summary>An omitted argument value (behaves as blank, but <c>ISOMITTED</c> returns <see langword="true"/>).</summary>
+    internal static FormulaValue Omitted => new(CellValue.Blank, OmittedSentinel);
 
     /// <summary>Wraps a scalar.</summary>
     public static FormulaValue Scalar(CellValue value) => new(value);
@@ -61,6 +69,8 @@ public readonly struct FormulaValue
 
     internal static FormulaValue Array(ArrayValue array) => new(array, FormulaValueKind.Array);
 
+    internal static FormulaValue Lambda(LambdaValue lambda) => new(lambda, FormulaValueKind.Lambda);
+
     /// <summary>Whether the value is a scalar of any kind.</summary>
     public bool IsScalar => Kind == FormulaValueKind.Scalar;
 
@@ -69,6 +79,12 @@ public readonly struct FormulaValue
 
     /// <summary>Whether the value is an array.</summary>
     public bool IsArray => Kind == FormulaValueKind.Array;
+
+    /// <summary>Whether the value is a callable <c>LAMBDA</c>.</summary>
+    public bool IsLambda => Kind == FormulaValueKind.Lambda;
+
+    /// <summary>Whether the value was produced by an omitted argument in a call.</summary>
+    internal bool IsOmitted => ReferenceEquals(_payload, OmittedSentinel);
 
     /// <summary>Whether the value is a scalar error.</summary>
     public bool IsError => Kind == FormulaValueKind.Scalar && _scalar.IsError;
@@ -83,6 +99,8 @@ public readonly struct FormulaValue
 
     internal ArrayValue AsArray => (ArrayValue)_payload!;
 
+    internal LambdaValue AsLambda => (LambdaValue)_payload!;
+
     /// <summary>Wraps a cell value.</summary>
     public static implicit operator FormulaValue(CellValue value) => new(value);
 
@@ -91,6 +109,7 @@ public readonly struct FormulaValue
     {
         FormulaValueKind.Reference => AsReference.ToString(),
         FormulaValueKind.Array => AsArray.ToString(),
+        FormulaValueKind.Lambda => AsLambda.ToString(),
         _ => _scalar.ToString(),
     };
 }

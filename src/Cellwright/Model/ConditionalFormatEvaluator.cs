@@ -160,49 +160,49 @@ internal sealed class ConditionalFormatEvaluator
             switch (rule.Type)
             {
                 case ConditionalFormatType.ColorScale when rule.ColorScale is { } colorScale:
-                {
-                    if (rule.Formulas.Count > 0 && !IsFormulaTrue(rule, cell, 0))
-                        break;
-
-                    ExcelColor graded = Grade(rule, colorScale, value);
-                    if (!graded.IsAuto)
                     {
-                        // Rules arrive highest-priority first. A scale owns the fill channel, but
-                        // only if an earlier differential format has not already claimed it.
-                        if (scale.IsAuto && (style is null || style.FillColor.IsAuto))
-                            scale = graded;
-                        stop = rule.StopIfTrue;
+                        if (rule.Formulas.Count > 0 && !IsFormulaTrue(rule, cell, 0))
+                            break;
+
+                        ExcelColor graded = Grade(rule, colorScale, value);
+                        if (!graded.IsAuto)
+                        {
+                            // Rules arrive highest-priority first. A scale owns the fill channel, but
+                            // only if an earlier differential format has not already claimed it.
+                            if (scale.IsAuto && (style is null || style.FillColor.IsAuto))
+                                scale = graded;
+                            stop = rule.StopIfTrue;
+                        }
+                        break;
                     }
-                    break;
-                }
 
                 case ConditionalFormatType.DataBar when rule.DataBar is { } dataBar:
-                {
-                    if (rule.Formulas.Count > 0 && !IsFormulaTrue(rule, cell, 0))
-                        break;
-
-                    ConditionalBar? measured = Measure(rule, dataBar, value);
-                    if (measured is not null)
                     {
-                        bar ??= measured;
-                        stop = rule.StopIfTrue;
+                        if (rule.Formulas.Count > 0 && !IsFormulaTrue(rule, cell, 0))
+                            break;
+
+                        ConditionalBar? measured = Measure(rule, dataBar, value);
+                        if (measured is not null)
+                        {
+                            bar ??= measured;
+                            stop = rule.StopIfTrue;
+                        }
+                        break;
                     }
-                    break;
-                }
 
                 case ConditionalFormatType.IconSet when rule.IconSet is { } iconSet:
-                {
-                    if (rule.Formulas.Count > 0 && !IsFormulaTrue(rule, cell, 0))
-                        break;
-
-                    ConditionalIcon? chosen = Choose(rule, iconSet, value);
-                    if (chosen is not null)
                     {
-                        icon ??= chosen;
-                        stop = rule.StopIfTrue;
+                        if (rule.Formulas.Count > 0 && !IsFormulaTrue(rule, cell, 0))
+                            break;
+
+                        ConditionalIcon? chosen = Choose(rule, iconSet, value);
+                        if (chosen is not null)
+                        {
+                            icon ??= chosen;
+                            stop = rule.StopIfTrue;
+                        }
+                        break;
                     }
-                    break;
-                }
 
                 default:
                     if (!Matches(rule, cell, value))
@@ -625,10 +625,10 @@ internal sealed class ConditionalFormatEvaluator
                 return statistics.Maximum;
 
             case ConditionalValueType.Percent:
-            {
-                double percent = StopParameter(stop.Value, rule, fallback: 0);
-                return statistics.Minimum + ((statistics.Maximum - statistics.Minimum) * percent / 100);
-            }
+                {
+                    double percent = StopParameter(stop.Value, rule, fallback: 0);
+                    return statistics.Minimum + ((statistics.Maximum - statistics.Minimum) * percent / 100);
+                }
 
             case ConditionalValueType.Percentile:
                 return statistics.Percentile(StopParameter(stop.Value, rule, fallback: 0));

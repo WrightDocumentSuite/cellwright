@@ -7,20 +7,25 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
+    <!-- Every restore writes a lock file. CI consumes those files in locked mode, so a
+         dependency change has to be reviewed instead of being selected implicitly. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(RestoreLockedMode)' == '' and ('$(ContinuousIntegrationBuild)' == 'true' or '$(CI)' == 'true')">true</RestoreLockedMode>
+    <NuGetLockFilePath Condition="'$(CellwrightVerificationLockRoot)' != ''">$(CellwrightVerificationLockRoot)/$(MSBuildProjectName).packages.lock.json</NuGetLockFilePath>
+    <!-- Audit direct and transitive dependencies; TreatWarningsAsErrors turns moderate or
+         higher advisories into a restore gate unless a project suppresses one explicitly. -->
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>moderate</NuGetAuditLevel>
     <UseArtifactsOutput>true</UseArtifactsOutput>
     <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
     <InvariantGlobalization>false</InvariantGlobalization>
     <NeutralLanguage>en</NeutralLanguage>
-    <!-- Keep the selected solution configuration on out-of-solution project references such
-         as the pinned Inkwright source used by Cellwright.Pdf. MSBuild otherwise strips it and
-         also compiles that dependency as Debug during a Release solution build. -->
-    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
   </PropertyGroup>
 
   <PropertyGroup Label="Package metadata defaults">
     <Authors>Pavel Deecalov</Authors>
     <Product>Cellwright</Product>
-    <Version>0.1.3</Version>
+    <Version>0.1.4</Version>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/WrightDocumentSuite/cellwright</PackageProjectUrl>
     <RepositoryUrl>https://github.com/WrightDocumentSuite/cellwright.git</RepositoryUrl>
@@ -29,6 +34,14 @@
     <!-- The packaged readme is the English, NuGet-facing one; the repository README stays
          the full development-facing document. -->
     <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Opt-in release package validation">
+    <!-- Package validation adds PackageDownload items during restore, so keep it out of
+         ordinary local builds. eng/verify-packages.ps1 enables this gate explicitly. -->
+    <CellwrightPackageBaselineVersion>0.1.3</CellwrightPackageBaselineVersion>
+    <EnablePackageValidation Condition="'$(CellwrightEnablePackageValidation)' == 'true'">true</EnablePackageValidation>
+    <PackageValidationBaselineVersion Condition="'$(CellwrightEnablePackageValidation)' == 'true'">$(CellwrightPackageBaselineVersion)</PackageValidationBaselineVersion>
   </PropertyGroup>
 
   <PropertyGroup Label="Symbols and source linking">
@@ -56,5 +69,39 @@
          README.md, whatever the source file is called here. -->
     <None Include="$(MSBuildThisFileDirectory)README.nuget.md" Pack="true" PackagePath="README.md" Visible="false" />
   </ItemGroup>
+
+  <!-- NuGet emits a ProjectReference as a minimum version by default (for example 0.1.3
+       means [0.1.3, )). Cellwright packages are released as one tested set, so rewrite
+       only project-reference package dependencies to exact ranges before PackTask sees
+       them. External PackageReference ranges keep their independently chosen policy. -->
+  <Target Name="PinCellwrightProjectReferencePackageVersions"
+          AfterTargets="_GetProjectReferenceVersions"
+          Condition="'$(IsPackable)' == 'true'">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Update="@(_ProjectReferencesWithVersions)"
+                                      Condition="'%(_ProjectReferencesWithVersions.ProjectVersion)' != '' and !$([System.String]::Copy('%(_ProjectReferencesWithVersions.ProjectVersion)').StartsWith('['))">
+        <ProjectVersion>[%(_ProjectReferencesWithVersions.ProjectVersion)]</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+    </ItemGroup>
+  </Target>
+
+  <!-- All supported package builds go through the verifier, which assigns a unique prerelease
+       locally and owns the explicit stable-release path. This also prevents a manually reused
+       prerelease from entering a developer cache under an ambiguous identity. -->
+  <Target Name="RequireCellwrightPackageVerifier"
+          BeforeTargets="GenerateNuspec"
+          Condition="'$(IsPackable)' == 'true' and '$(CellwrightPackageBuild)' != 'true'">
+    <Error Text="Refusing to pack outside eng/verify-packages.ps1. The verifier assigns unique local versions and runs the package compatibility and consumer gates." />
+  </Target>
+
+  <!-- A stable package can be published and cached indefinitely, so even the verifier needs a
+       separate opt-in for an intentional release. -->
+  <Target Name="RejectAccidentalStablePackageVersion"
+          BeforeTargets="GenerateNuspec"
+          Condition="'$(IsPackable)' == 'true' and
+                     '$(CellwrightAllowStablePackageVersion)' != 'true' and
+                     !$([System.String]::Copy('$(PackageVersion)').Contains('-'))">
+    <Error Text="Refusing to pack stable version $(PackageVersion). Use eng/verify-packages.ps1 -PackageVersion $(PackageVersion) -AllowStablePackageVersion for an intentional release." />
+  </Target>
 
 </Project>

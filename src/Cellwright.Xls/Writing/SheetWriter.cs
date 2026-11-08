@@ -302,23 +302,23 @@ internal sealed class SheetWriter(XlsWriteContext context, Worksheet sheet, int 
 
             case CellValueKind.Boolean:
             case CellValueKind.Error:
-            {
-                int start = writer.BeginRecord(BiffRecordType.BoolErr);
-                AppendCellHeader(writer, cell, xf);
-                if (value.Kind == CellValueKind.Boolean)
                 {
-                    writer.AppendByte(value.GetBoolean() ? (byte)1 : (byte)0);
-                    writer.AppendByte(0);
-                }
-                else
-                {
-                    writer.AppendByte(BiffValues.EncodeError(value.GetError()));
-                    writer.AppendByte(1);
-                }
+                    int start = writer.BeginRecord(BiffRecordType.BoolErr);
+                    AppendCellHeader(writer, cell, xf);
+                    if (value.Kind == CellValueKind.Boolean)
+                    {
+                        writer.AppendByte(value.GetBoolean() ? (byte)1 : (byte)0);
+                        writer.AppendByte(0);
+                    }
+                    else
+                    {
+                        writer.AppendByte(BiffValues.EncodeError(value.GetError()));
+                        writer.AppendByte(1);
+                    }
 
-                writer.EndRecord(start);
-                return;
-            }
+                    writer.EndRecord(start);
+                    return;
+                }
 
             default:
                 WriteNumericCell(writer, cell, xf, value.ToSerialNumber(context.Workbook.DateSystem));
@@ -349,6 +349,7 @@ internal sealed class SheetWriter(XlsWriteContext context, Worksheet sheet, int 
 
     private void WriteLabelSst(BiffWriter writer, CellRef cell, int xf, string text)
     {
+        bool wasTruncated = false;
         if (text.Length > SheetLimits.MaxCellTextLength)
         {
             context.Warn(new WorkbookWarning(
@@ -357,11 +358,27 @@ internal sealed class SheetWriter(XlsWriteContext context, Worksheet sheet, int 
                 $"{SheetLimits.MaxCellTextLength}, so the text was cut short.",
                 cell));
             text = text[..SheetLimits.MaxCellTextLength];
+            wasTruncated = true;
+        }
+
+        int sstIndex;
+        if (!wasTruncated &&
+            sheet.RichStringTable.TryGetValue(cell, out IO.RichStringMarkup stored) &&
+            string.Equals(stored.Text, text, StringComparison.Ordinal))
+        {
+            RichText rich = Streaming.RichTextMarkup.Parse(stored.Markup);
+            sstIndex = rich.IsFormatted
+                ? context.InternRichString(rich, stored.Markup, context.StyleTable.FontOfXf(xf))
+                : context.InternString(text);
+        }
+        else
+        {
+            sstIndex = context.InternString(text);
         }
 
         int start = writer.BeginRecord(BiffRecordType.LabelSst);
         AppendCellHeader(writer, cell, xf);
-        writer.AppendUInt32((uint)context.InternString(text));
+        writer.AppendUInt32((uint)sstIndex);
         writer.EndRecord(start);
     }
 

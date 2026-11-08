@@ -167,8 +167,11 @@ checks it between cells.
   AES-256/SHA-512, the one Excel writes.
 - Macros are read (through `Cellwright.Xls`) but not written: the project part is copied byte for
   byte anyway, so there is nothing to regenerate — see [vba.md](vba.md).
-- Sheet copy (`Sheets.Copy`) takes only what the model represents: drawings and other raw markup
-  from the source worksheet part stay with the original.
+- Sheet copy (`Sheets.Copy`) rebuilds everything represented by the model, including pictures and
+  charts, retargets explicit self references, and clones a loaded chart's child relationship graph.
+  Source-owned worksheet markup and unmodelled shapes are not guessed at: the diagnostic overload
+  returns `SheetCopyContentNotCopied`, and the established overload sends it to
+  `Workbook.OnWarning`.
 - Differential formats (`dxf`) from a loaded file are parsed into a readable form (`rule.Style`),
   but the format table is written from the original markup: an untouched rule keeps its index; a
   rewritten style appends its format after preserved ones.
@@ -179,9 +182,10 @@ checks it between cells.
   have cross-record offsets, so charts and pivots do not survive through it. Limits —
   [xls.md](xls.md).
 - `.xlsb` is read but not written: save a read book as xlsx or `.xls`. Limits — [xlsb.md](xlsb.md).
-- Pictures are read from all three formats and written only to xlsx. Charts and shapes beside them
-  are not modeled: they travel with the untouched drawing part and are lost if worksheet pictures
-  are changed. Details — [pictures.md](pictures.md).
+- Pictures are read from all three formats and written to xlsx and `.xls`; there is no xlsb writer.
+  Embedded xlsx charts are modelled and written too; unsupported shapes beside them travel with an
+  untouched drawing, or are reported as `DrawingShapesNotWritten` when a drawing is regenerated. Details —
+  [pictures.md](pictures.md).
 - Where Excel diverges from ISO/IEC 29500, the library follows Excel, not the standard: the file
   was written by Excel and is opened by someone who expects Excel behavior. Divergences and the
   normative documents everything was checked against — [conformance.md](conformance.md).

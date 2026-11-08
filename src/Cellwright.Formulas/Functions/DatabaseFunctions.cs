@@ -110,19 +110,19 @@ internal static class DatabaseFunctions
 
     private static FormulaValue Reduce(
         Reduction reduction, List<double> numbers, int nonEmpty, int admitted, in CellValue first) => reduction switch
-    {
-        Reduction.Count => FormulaValue.Number(numbers.Count),
-        Reduction.CountA => FormulaValue.Number(nonEmpty),
-        Reduction.Get => Single(admitted, first),
-        Reduction.Sum => FormulaValue.Number(numbers.Sum()),
-        Reduction.Product => FormulaValue.Number(Product(numbers)),
-        Reduction.Max => FormulaValue.Number(numbers.Count == 0 ? 0 : numbers.Max()),
-        Reduction.Min => FormulaValue.Number(numbers.Count == 0 ? 0 : numbers.Min()),
-        Reduction.Average => numbers.Count == 0
-            ? FormulaValue.Error(ExcelError.DivisionByZero)
-            : FormulaValue.Number(numbers.Sum() / numbers.Count),
-        _ => Spread(numbers, reduction),
-    };
+        {
+            Reduction.Count => FormulaValue.Number(numbers.Count),
+            Reduction.CountA => FormulaValue.Number(nonEmpty),
+            Reduction.Get => Single(admitted, first),
+            Reduction.Sum => FormulaValue.Number(numbers.Sum()),
+            Reduction.Product => FormulaValue.Number(Product(numbers)),
+            Reduction.Max => FormulaValue.Number(numbers.Count == 0 ? 0 : numbers.Max()),
+            Reduction.Min => FormulaValue.Number(numbers.Count == 0 ? 0 : numbers.Min()),
+            Reduction.Average => numbers.Count == 0
+                ? FormulaValue.Error(ExcelError.DivisionByZero)
+                : FormulaValue.Number(numbers.Sum() / numbers.Count),
+            _ => Spread(numbers, reduction),
+        };
 
     /// <summary>
     /// <c>DGET</c> asks for the one record that fits. Conditions that fit none are a mistake in

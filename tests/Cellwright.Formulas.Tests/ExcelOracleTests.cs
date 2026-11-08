@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Cellwright.Tests.Shared;
 using Xunit;
 
 namespace Cellwright.Formulas.Tests;
@@ -283,21 +284,13 @@ internal static class OracleCorpus
 
         var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
         return [.. Directory.EnumerateFiles(root, "*.xlsx", options)
-            .Where(static path => !path.Contains("Cellwright", StringComparison.OrdinalIgnoreCase))
+            .Where(CorpusRoot.Includes)
             .OrderBy(static path => path, StringComparer.Ordinal)];
     }
 
     /// <summary>Walks up from the test binaries looking for the folder holding the sibling repositories.</summary>
     private static string? FindCorpusRoot()
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (Directory.Exists(Path.Combine(directory.FullName, "ClosedXML-0.105.0")))
-                return directory.FullName;
-            directory = directory.Parent;
-        }
-
-        return null;
+        return CorpusRoot.Find("ClosedXML-0.105.0");
     }
 }

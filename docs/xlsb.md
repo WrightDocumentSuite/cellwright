@@ -47,8 +47,8 @@ binary form.
 
 | Area | Details |
 | --- | --- |
-| Values | All twelve cell records: blank, RK, double, inline string, shared string, rich text, boolean, error, and four formula kinds |
-| Strings | `XLWideString` (UTF-16 with four-byte length) and the shared string table |
+| Values | All twelve cell records: blank, RK, double, inline string, shared string, rich text (with per-run `StrRun` formatting), boolean, error, and four formula kinds |
+| Strings | `XLWideString` (UTF-16 with four-byte length) and the shared string table (`BrtSSTItem` with rich-text formatting runs) |
 | Numbers | RK encoding same as BIFF8 — `fx100`/`fInt` bits |
 | Dates | Both epochs, 1900 and 1904, from bit `f1904`; value type inferred from number format |
 | Styles | Number formats, fonts, fills, borders, and the `cellXfs` table — into the shared `StylePool` |
@@ -126,7 +126,6 @@ Across the whole corpus `UndecodedFormula` does not occur once now: 11,696 formu
   reported as `CfRule12Skipped`, not turned into a rule without a scale.
 - **Cross-workbook table references are not rendered.** A `PtgList` token with the `nonresident`
   flag points outside the file; the text of such a formula is not reconstructed.
-- **Rich text** in a cell collapses to plain text — same as on the xlsx side.
 
 ## How it is verified
 

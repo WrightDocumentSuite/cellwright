@@ -36,7 +36,56 @@ internal sealed class WorkbookComposer
         if (pages.Count == 0)
             pages.AddRange(new SheetComposer(_context, Blank(selected), 0).ComposeBlank());
 
+        ResolveInternalLinks(pages);
         return pages;
+    }
+
+    private void ResolveInternalLinks(List<ComposedPage> pages)
+    {
+        foreach (ComposedPage page in pages)
+        {
+            foreach (PageItem item in page.Items)
+            {
+                if (item is not LinkItem { Url: null } link)
+                    continue;
+
+                if (link.TargetSheet is { } targetSheet &&
+                    link.TargetCell is { } targetCell &&
+                    FindDestinationPage(pages, targetSheet, targetCell) is int pageIndex)
+                {
+                    link.DestinationPageIndex = pageIndex;
+                }
+                else
+                {
+                    _context.Diagnostics.Add(
+                        PdfExportWarningKind.ContentSkipped,
+                        "A hyperlink that points inside the workbook is not clickable in the PDF.",
+                        "internal-link");
+                }
+            }
+        }
+    }
+
+    private static int? FindDestinationPage(List<ComposedPage> pages, Worksheet targetSheet, CellRef targetCell)
+    {
+        int? firstPageOfSheet = null;
+        for (int i = 0; i < pages.Count; i++)
+        {
+            ComposedPage candidate = pages[i];
+            if (!ReferenceEquals(candidate.Sheet, targetSheet))
+                continue;
+
+            firstPageOfSheet ??= i;
+            if (candidate.RowSlots is { } rows &&
+                candidate.ColumnSlots is { } columns &&
+                rows.SlotOf(targetCell.Row) >= 0 &&
+                columns.SlotOf(targetCell.Column) >= 0)
+            {
+                return i;
+            }
+        }
+
+        return firstPageOfSheet;
     }
 
     /// <summary>The sheet a workbook with nothing to print takes its one page's paper from.</summary>

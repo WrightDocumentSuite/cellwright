@@ -178,5 +178,5 @@ internal interface IRecordDecryptor
     /// <param name="offset">Where the body starts.</param>
     /// <param name="size">How long the body is.</param>
     /// <param name="recordType">Type of the record, since a few are never encrypted.</param>
-    ReadOnlyMemory<byte> Decrypt(byte[] stream, int offset, int size, ushort recordType);
+    public ReadOnlyMemory<byte> Decrypt(byte[] stream, int offset, int size, ushort recordType);
 }

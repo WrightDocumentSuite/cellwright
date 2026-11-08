@@ -16,9 +16,9 @@ namespace Cellwright.Markdown;
 /// </remarks>
 internal static class MarkdownText
 {
-    private const string _escapableAsciiPunctuation = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+    private const string EscapableAsciiPunctuation = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 
-    private static readonly HashSet<string> _unsafeSchemes =
+    private static readonly HashSet<string> UnsafeSchemes =
         new(StringComparer.OrdinalIgnoreCase) { "data", "javascript", "vbscript" };
 
     /// <summary>Appends text as the content of a table cell.</summary>
@@ -93,7 +93,7 @@ internal static class MarkdownText
         if (colon <= 0 || !IsScheme(decoded.AsSpan(0, colon)))
             return true;
 
-        return !_unsafeSchemes.Contains(decoded[..colon]);
+        return !UnsafeSchemes.Contains(decoded[..colon]);
     }
 
     /// <summary>
@@ -113,7 +113,7 @@ internal static class MarkdownText
             }
             else
             {
-                if (_escapableAsciiPunctuation.Contains(c))
+                if (EscapableAsciiPunctuation.Contains(c))
                     builder.Append('\\');
                 builder.Append(c);
             }

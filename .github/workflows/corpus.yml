@@ -1,0 +1,92 @@
+name: Corpus integration
+
+on:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: corpus-integration-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  NUGET_PACKAGES: ${{ github.workspace }}/artifacts/nuget-integration-cache
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-integration-v2-${{ runner.os }}-${{ hashFiles('global.json', 'NuGet.Config', 'nuget.config', 'Directory.Build.props', 'Directory.Packages.props', '**/*.csproj', '**/*.props', '**/*.targets', '**/packages.lock.json') }}
+
+      - name: Cache verified corpus archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.corpus-cache
+          key: corpus-v1-${{ hashFiles('eng/corpus/manifest.json') }}
+
+      - name: Fetch and verify pinned workbook corpus
+        run: >-
+          python eng/corpus/fetch.py
+          --manifest eng/corpus/manifest.json
+          --root "${RUNNER_TEMP}/cellwright-corpus"
+          --cache .corpus-cache
+
+      - run: dotnet restore Cellwright.slnx --locked-mode
+      - run: dotnet build Cellwright.slnx -c Release --no-restore
+
+      - name: Run every test project against the corpus
+        env:
+          CELLWRIGHT_TEST_CULTURE: ru-RU
+          CELLWRIGHT_CORPUS_ROOT: ${{ runner.temp }}/cellwright-corpus
+        shell: bash
+        run: |
+          projects=(
+            tests/Cellwright.Tests/Cellwright.Tests.csproj
+            tests/Cellwright.Formulas.Tests/Cellwright.Formulas.Tests.csproj
+            tests/Cellwright.Mapping.Tests/Cellwright.Mapping.Tests.csproj
+            tests/Cellwright.Pdf.Tests/Cellwright.Pdf.Tests.csproj
+            tests/Cellwright.Xls.Tests/Cellwright.Xls.Tests.csproj
+          )
+          status=0
+          for project in "${projects[@]}"; do
+            name="$(basename "$(dirname "$project")")"
+            dotnet test "$project" -c Release --no-build --no-restore \
+              --verbosity normal \
+              --results-directory artifacts/test-results/corpus \
+              --logger "trx;LogFileName=${name}.trx" || status=1
+          done
+          exit "$status"
+
+      - name: Reject corpus skips and incomplete test runs
+        if: always()
+        run: >-
+          python eng/corpus/verify_results.py
+          --manifest eng/corpus/manifest.json
+          --results artifacts/test-results/corpus
+
+      - name: Upload corpus test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-test-results
+          path: artifacts/test-results/corpus/*.trx
+          if-no-files-found: error
+          retention-days: 14

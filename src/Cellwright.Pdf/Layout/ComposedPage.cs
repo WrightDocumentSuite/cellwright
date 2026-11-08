@@ -73,4 +73,10 @@ internal sealed class ComposedPage
     /// once the scale is known.
     /// </summary>
     public (double X, double Y) Offset { get; set; }
+
+    /// <summary>The columns drawn on this page, or <see langword="null"/> for a blank page.</summary>
+    public PageSlots? ColumnSlots { get; set; }
+
+    /// <summary>The rows drawn on this page, or <see langword="null"/> for a blank page.</summary>
+    public PageSlots? RowSlots { get; set; }
 }

@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "cellwright": {
+        "type": "Project"
+      },
+      "cellwright.formulas": {
+        "type": "Project",
+        "dependencies": {
+          "Cellwright": "[0.1.4, )",
+          "System.Numerics.Tensors": "[10.0.13, )"
+        }
+      },
+      "cellwright.mapping": {
+        "type": "Project",
+        "dependencies": {
+          "Cellwright": "[0.1.4, )"
+        }
+      },
+      "cellwright.xls": {
+        "type": "Project",
+        "dependencies": {
+          "Cellwright": "[0.1.4, )",
+          "Cellwright.Formulas": "[0.1.4, )"
+        }
+      },
+      "System.Numerics.Tensors": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.13, )",
+        "resolved": "10.0.13",
+        "contentHash": "E4JC7KcY4j1yx9uy8tVsHlGThnwLdUWtUz6aLHCqbN/jbtwbwbZgnVEF9atUr/7ynFCbo8Rbij056Y9bWM9ALg=="
+      }
+    }
+  }
+}

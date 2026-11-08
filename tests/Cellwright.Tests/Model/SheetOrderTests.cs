@@ -1,3 +1,6 @@
+using System.IO.Compression;
+using System.Text;
+using Cellwright.IO;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using Xunit;
@@ -116,6 +119,195 @@ public sealed class SheetOrderTests
     }
 
     [Fact]
+    public void ACopyRetargetsExplicitSelfReferencesButLeavesExternalBooksAlone()
+    {
+        Workbook workbook = Workbook.Create();
+        Worksheet source = workbook.Sheets.Add("Report");
+        source["A1"] = 1;
+        source.Cell("A2").SetFormula(
+            "Report!B1+'Report'!C1+[1]Report!D1+Other!E1+\"Report!F1\"");
+        source.Validations.Add(DataValidation.Custom("B2", "Report!A1>0"));
+        source.ConditionalFormats.Add(ConditionalFormatRule.Expression(
+            "C2", "Report!A1>0", DifferentialStyle.Good));
+        source.Hyperlinks.Add(Hyperlink.ToLocation(RangeRef.Parse("D2"), "Report!A1"));
+        source.AddChart(
+            ChartKind.Column,
+            "F2:M17",
+            [new ChartSeriesDefinition("Report!$A$1:$A$2", "[1]Report!$B$1:$B$2")]);
+
+        SheetCopyResult result = workbook.Sheets.Copy(source, "Report copy", new SheetCopyOptions());
+        Worksheet copy = result.Worksheet;
+
+        Assert.False(result.HasWarnings);
+        Assert.Equal(
+            "'Report copy'!B1+'Report copy'!C1+[1]Report!D1+Other!E1+\"Report!F1\"",
+            copy.Cell("A2").Formula);
+        Assert.Equal("'Report copy'!A1>0", Assert.Single(copy.Validations).Formula1);
+        Assert.Equal("'Report copy'!A1>0", Assert.Single(copy.ConditionalFormats).Formulas[0]);
+        Assert.Equal("'Report copy'!A1", Assert.Single(copy.Hyperlinks).Location);
+
+        ChartSeries series = Assert.Single(Assert.Single(copy.Charts).Series);
+        Assert.Equal("'Report copy'!$A$1:$A$2", series.ValuesReference);
+        Assert.Equal("[1]Report!$B$1:$B$2", series.CategoriesReference);
+    }
+
+    [Fact]
+    public void SelfReferenceRetargetingCanBeDisabledExplicitly()
+    {
+        Workbook workbook = Workbook.Create();
+        Worksheet source = workbook.Sheets.Add("Report");
+        source.Cell("A1").SetFormula("Report!B1");
+
+        Worksheet copy = workbook.Sheets.Copy(
+            source,
+            "Report copy",
+            new SheetCopyOptions { RetargetSelfReferences = false }).Worksheet;
+
+        Assert.Equal("Report!B1", copy.Cell("A1").Formula);
+    }
+
+    [Fact]
+    public async Task ACopyCarriesIndependentPicturesAndChartsThroughSave()
+    {
+        Workbook workbook = Workbook.Create();
+        Worksheet source = workbook.Sheets.Add("Report");
+        source["A1"] = 10d;
+        byte[] png = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+        source.Pictures.Add(png, "B2", "C3", "Logo");
+        source.AddChart(ChartKind.Line, "E2:L17", "Report!$A$1:$A$2", title: "Trend");
+
+        Worksheet copy = workbook.Sheets.Copy(source, "Report copy");
+
+        Picture sourcePicture = Assert.Single(source.Pictures);
+        Picture copiedPicture = Assert.Single(copy.Pictures);
+        Assert.NotSame(sourcePicture, copiedPicture);
+        Assert.NotSame(sourcePicture.Anchor, copiedPicture.Anchor);
+        Assert.True(sourcePicture.Content.Span.SequenceEqual(copiedPicture.Content.Span));
+
+        Chart sourceChart = Assert.Single(source.Charts);
+        Chart copiedChart = Assert.Single(copy.Charts);
+        Assert.NotSame(sourceChart, copiedChart);
+        Assert.NotSame(sourceChart.Anchor, copiedChart.Anchor);
+        Assert.Equal("'Report copy'!$A$1:$A$2", Assert.Single(copiedChart.Series).ValuesReference);
+
+        copiedPicture.Anchor.From = CellRef.Parse("C4");
+        copiedChart.Anchor.From = CellRef.Parse("F5");
+        Assert.Equal(CellRef.Parse("B2"), sourcePicture.Anchor.From);
+        Assert.Equal(CellRef.Parse("E2"), sourceChart.Anchor.From);
+
+        Workbook reloaded = await SaveAndReloadAsync(workbook);
+        Worksheet savedCopy = reloaded.Sheets["Report copy"];
+        Assert.Equal("Logo", Assert.Single(savedCopy.Pictures).Name);
+        Assert.Equal(CellRef.Parse("C4"), savedCopy.Pictures[0].Anchor.From);
+        Assert.Equal("Trend", Assert.Single(savedCopy.Charts).Title);
+        Assert.Equal(CellRef.Parse("F5"), savedCopy.Charts[0].Anchor.From);
+        Assert.Equal("'Report copy'!$A$1:$A$2", savedCopy.Charts[0].Series[0].ValuesReference);
+    }
+
+    [Fact]
+    public async Task ALoadedChartCopyOwnsItsRawPartAfterTheSourceIsRemoved()
+    {
+        Workbook created = Workbook.Create();
+        Worksheet source = created.Sheets.Add("Report");
+        source["A1"] = 10d;
+        source["A2"] = 20d;
+        source.AddChart(
+            ChartKind.Column,
+            "D2:K17",
+            "Report!$A$1:$A$2",
+            title: "Loaded chart",
+            seriesName: "Amount");
+
+        Workbook loaded = await SaveAndLoadWithExternalChartRelationshipAsync(created);
+        Worksheet loadedSource = loaded.Sheets["Report"];
+        Chart loadedChart = Assert.Single(loadedSource.Charts);
+        Assert.NotNull(loadedChart.SourcePartPath);
+        Assert.Single(loaded.Preserved!.RelationshipsOf(loadedChart.SourcePartPath!));
+
+        SheetCopyResult result = loaded.Sheets.Copy(
+            loadedSource,
+            "Report copy",
+            new SheetCopyOptions());
+        Assert.False(result.HasWarnings);
+        Assert.True(loaded.Sheets.Remove("Report"));
+
+        using var saved = new MemoryStream();
+        await loaded.SaveAsync(
+            saved,
+            new SaveOptions { LeaveOpen = true },
+            TestContext.Current.CancellationToken);
+
+        saved.Position = 0;
+        using (var archive = new ZipArchive(saved, ZipArchiveMode.Read, leaveOpen: true))
+        {
+            ZipArchiveEntry? relationshipPart = archive.GetEntry("xl/charts/_rels/chart2.xml.rels");
+            Assert.NotNull(relationshipPart);
+            using var reader = new StreamReader(relationshipPart.Open(), Encoding.UTF8);
+            string relationships = reader.ReadToEnd();
+            Assert.Contains("https://example.com/chart-image.png", relationships, StringComparison.Ordinal);
+            Assert.Contains("TargetMode=\"External\"", relationships, StringComparison.Ordinal);
+        }
+
+        saved.Position = 0;
+        using (SpreadsheetDocument document = SpreadsheetDocument.Open(saved, isEditable: false))
+        {
+            ValidationErrorInfo? error = new OpenXmlValidator()
+                .Validate(document, TestContext.Current.CancellationToken)
+                .FirstOrDefault();
+            Assert.True(error is null, $"{error?.Path?.XPath} {error?.Description}");
+        }
+
+        saved.Position = 0;
+        Workbook reloaded = await Workbook.LoadAsync(
+            saved,
+            new LoadOptions { LeaveOpen = true },
+            TestContext.Current.CancellationToken);
+        Worksheet copy = Assert.Single(reloaded.Sheets);
+        Chart chart = Assert.Single(copy.Charts);
+        ChartSeries series = Assert.Single(chart.Series);
+
+        Assert.Equal("Report copy", copy.Name);
+        Assert.Equal("Loaded chart", chart.Title);
+        Assert.Equal("Amount", series.Name);
+        Assert.Equal("'Report copy'!$A$1:$A$2", series.ValuesReference);
+        Assert.Equal([10d, 20d], series.Values);
+    }
+
+    [Fact]
+    public async Task LoadedOpaqueMarkupProducesAggregatedMachineReadableCopyDiagnostics()
+    {
+        Workbook workbook = await LoadWithOpaqueSheetMarkupAsync();
+        Worksheet source = workbook.Sheets["Report"];
+        var optionWarnings = new List<WorkbookWarning>();
+        var workbookWarnings = new List<WorkbookWarning>();
+        workbook.OnWarning = workbookWarnings.Add;
+
+        SheetCopyResult result = workbook.Sheets.Copy(
+            source,
+            "Report copy",
+            new SheetCopyOptions { OnWarning = optionWarnings.Add });
+
+        WorkbookWarning warning = Assert.Single(result.Warnings);
+        Assert.Equal("SheetCopyContentNotCopied", warning.Code);
+        Assert.Contains("opaque worksheet markup", warning.Message, StringComparison.Ordinal);
+        Assert.Equal(warning, Assert.Single(optionWarnings));
+        Assert.Equal(warning, Assert.Single(workbookWarnings));
+        Assert.Null(result.Worksheet.Markup);
+
+        // The established overload remains source-compatible and surfaces the same limitation
+        // through the workbook's edit-warning channel.
+        Worksheet legacyCopy = workbook.Sheets.Copy(source, "Legacy copy");
+        Assert.Equal("Legacy copy", legacyCopy.Name);
+        Assert.Equal(2, workbookWarnings.Count);
+        Assert.All(workbookWarnings, item => Assert.Equal("SheetCopyContentNotCopied", item.Code));
+
+        Workbook reloaded = await SaveAndReloadAsync(workbook);
+        Assert.Null(reloaded.Sheets["Report copy"].Markup?.SheetPropertyChildren);
+        Assert.NotNull(reloaded.Sheets["Report"].Markup?.SheetPropertyChildren);
+    }
+
+    [Fact]
     public async Task ACopyCarriesAnIndependentThreadedConversation()
     {
         Workbook workbook = Workbook.Create();
@@ -221,5 +413,91 @@ public sealed class SheetOrderTests
     {
         Workbook workbook = ThreeSheets();
         Assert.Throws<ArgumentException>(() => workbook.Sheets.Copy("First", "Second"));
+    }
+
+    private static async Task<Workbook> LoadWithOpaqueSheetMarkupAsync()
+    {
+        Workbook workbook = Workbook.Create();
+        workbook.Sheets.Add("Report")["A1"] = "value";
+
+        using var original = new MemoryStream();
+        await workbook.SaveAsync(
+            original,
+            new SaveOptions { LeaveOpen = true },
+            TestContext.Current.CancellationToken);
+
+        original.Position = 0;
+        var rewritten = new MemoryStream();
+        using (var input = new ZipArchive(original, ZipArchiveMode.Read, leaveOpen: true))
+        using (var output = new ZipArchive(rewritten, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (ZipArchiveEntry entry in input.Entries)
+            {
+                ZipArchiveEntry destination = output.CreateEntry(entry.FullName, CompressionLevel.Fastest);
+                using Stream target = destination.Open();
+                using Stream source = entry.Open();
+                if (entry.FullName != "xl/worksheets/sheet1.xml")
+                {
+                    source.CopyTo(target);
+                    continue;
+                }
+
+                using var reader = new StreamReader(source, Encoding.UTF8);
+                string xml = reader.ReadToEnd();
+                int sheetData = xml.IndexOf("<sheetData", StringComparison.Ordinal);
+                Assert.True(sheetData >= 0);
+                string withOutline = xml.Insert(
+                    sheetData,
+                    "<sheetPr><outlinePr summaryBelow=\"0\"/></sheetPr>");
+                target.Write(Encoding.UTF8.GetBytes(withOutline));
+            }
+        }
+
+        rewritten.Position = 0;
+        return await Workbook.LoadAsync(
+            rewritten,
+            new LoadOptions { LeaveOpen = true },
+            TestContext.Current.CancellationToken);
+    }
+
+    private static async Task<Workbook> SaveAndLoadWithExternalChartRelationshipAsync(Workbook workbook)
+    {
+        using var original = new MemoryStream();
+        await workbook.SaveAsync(
+            original,
+            new SaveOptions { LeaveOpen = true },
+            TestContext.Current.CancellationToken);
+
+        original.Position = 0;
+        var rewritten = new MemoryStream();
+        using (var input = new ZipArchive(original, ZipArchiveMode.Read, leaveOpen: true))
+        using (var output = new ZipArchive(rewritten, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (ZipArchiveEntry entry in input.Entries)
+            {
+                ZipArchiveEntry destination = output.CreateEntry(entry.FullName, CompressionLevel.Fastest);
+                using Stream target = destination.Open();
+                using Stream source = entry.Open();
+                source.CopyTo(target);
+            }
+
+            ZipArchiveEntry relationships = output.CreateEntry(
+                "xl/charts/_rels/chart1.xml.rels",
+                CompressionLevel.Fastest);
+            using Stream relationshipStream = relationships.Open();
+            relationshipStream.Write(Encoding.UTF8.GetBytes($$"""
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId99" Type="{{XlsxSchema.RelImage}}"
+                    Target="https://example.com/chart-image.png" TargetMode="External"/>
+                </Relationships>
+                """));
+        }
+
+        rewritten.Position = 0;
+        return await Workbook.LoadAsync(
+            rewritten,
+            new LoadOptions { LeaveOpen = true },
+            TestContext.Current.CancellationToken);
     }
 }

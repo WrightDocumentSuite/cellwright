@@ -64,6 +64,8 @@ internal static class XlsbStyles
             }
         }
 
+        globals.Fonts.AddRange(fonts);
+
         foreach (XlsbXf xf in cellFormats)
         {
             string code = Resolve(formats, xf.Format);

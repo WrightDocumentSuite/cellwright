@@ -602,25 +602,25 @@ public sealed partial class XlsxReader
                     return;
 
                 case "protectedRanges":
-                {
-                    Flush();
-                    _slot = Slot.AfterProtection;
-                    string ranges = await xml.ReadOuterXmlAsync().ConfigureAwait(false);
-                    ProtectionPart.ReadProtectedRanges(ranges, sink.Protection);
-                    return;
-                }
+                    {
+                        Flush();
+                        _slot = Slot.AfterProtection;
+                        string ranges = await xml.ReadOuterXmlAsync().ConfigureAwait(false);
+                        ProtectionPart.ReadProtectedRanges(ranges, sink.Protection);
+                        return;
+                    }
 
                 // The print settings are modelled, but they still travel as markup so that an
                 // untouched sheet keeps whatever the producer wrote down to the attribute.
                 case "printOptions" or "pageMargins" or "pageSetup" or "headerFooter" or "rowBreaks" or "colBreaks":
-                {
-                    Flush();
-                    _slot = Slot.PrintSetup;
-                    string element = await xml.ReadOuterXmlAsync().ConfigureAwait(false);
-                    Markup.PageSetup += element;
-                    PageSetupPart.Read(element, sink.PageSetup, Markup);
-                    return;
-                }
+                    {
+                        Flush();
+                        _slot = Slot.PrintSetup;
+                        string element = await xml.ReadOuterXmlAsync().ConfigureAwait(false);
+                        Markup.PageSetup += element;
+                        PageSetupPart.Read(element, sink.PageSetup, Markup);
+                        return;
+                    }
 
                 case "legacyDrawing":
                     Flush();
@@ -632,19 +632,19 @@ public sealed partial class XlsxReader
                     Markup.TableParts = await xml.ReadOuterXmlAsync().ConfigureAwait(false);
                     return;
                 case "extLst":
-                {
-                    Flush();
-                    string extensions = await xml.ReadOuterXmlAsync().ConfigureAwait(false);
-                    Markup.Extensions = extensions;
-                    Markup.ExtensionConditionalFormats =
-                        ConditionalFormatPart.ReadExtensionConditionalFormats(
-                            extensions,
-                            out IReadOnlySet<int>? extensionPriorities,
-                            out bool hasConditionalFormats);
-                    Markup.ExtensionConditionalFormatPriorities = extensionPriorities;
-                    Markup.HasExtensionConditionalFormats = hasConditionalFormats;
-                    return;
-                }
+                    {
+                        Flush();
+                        string extensions = await xml.ReadOuterXmlAsync().ConfigureAwait(false);
+                        Markup.Extensions = extensions;
+                        Markup.ExtensionConditionalFormats =
+                            ConditionalFormatPart.ReadExtensionConditionalFormats(
+                                extensions,
+                                out IReadOnlySet<int>? extensionPriorities,
+                                out bool hasConditionalFormats);
+                        Markup.ExtensionConditionalFormatPriorities = extensionPriorities;
+                        Markup.HasExtensionConditionalFormats = hasConditionalFormats;
+                        return;
+                    }
                 default:
                     break;
             }

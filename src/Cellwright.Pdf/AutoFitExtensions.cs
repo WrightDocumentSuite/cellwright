@@ -41,7 +41,8 @@ public static class AutoFitExtensions
         /// Unlike the measuring a print does, this sets the height of every row it measures,
         /// including rows that already state one: asking for it is asking for the rows to be
         /// resized. How tall a wrapped cell turns out depends on how wide its column is, so fit
-        /// the columns first — <c>AutoFit</c> does both in that order.
+        /// the columns first — <c>AutoFit</c> does both in that order. Merged cells are ignored
+        /// unless <see cref="AutoFitOptions.IncludeMergedCells"/> is enabled.
         /// </remarks>
         public Worksheet AutoFitRows(AutoFitOptions? options = null)
         {

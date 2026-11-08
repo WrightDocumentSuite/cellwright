@@ -37,14 +37,6 @@ internal sealed partial class SheetComposer
         // could not be applied are reported, and those are reported where they are met — see
         // ReportConditionalFormats, which runs after the cells have been judged.
 
-        if (_setup.PrintHeadings)
-        {
-            Say(
-                PdfExportWarningKind.ContentSkipped,
-                "The row numbers and column letters a sheet asks to have printed are not drawn.",
-                "print-headings");
-        }
-
         if (_setup.Draft)
             Say(PdfExportWarningKind.LayoutApproximated, "A sheet set to print in draft is printed in full.", "draft");
 

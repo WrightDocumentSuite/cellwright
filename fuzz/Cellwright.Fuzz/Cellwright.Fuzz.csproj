@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- The fuzz harness is intentionally outside the product's central package graph. Its
+         instrumentation dependency is pinned here and locked independently. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SharpFuzz" Version="[2.3.0]" />
+    <ProjectReference Include="..\..\src\Cellwright.Xls\Cellwright.Xls.csproj" />
+  </ItemGroup>
+
+</Project>

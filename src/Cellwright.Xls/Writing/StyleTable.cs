@@ -119,9 +119,17 @@ internal sealed class StyleTable
                 return FontSlot(i);
         }
 
+        _ = InternColor(font.Color);
         _fonts.Add(font);
         return FontSlot(_fonts.Count - 1);
     }
+
+    /// <summary>Places a font in the workbook's font table and returns its BIFF font index.</summary>
+    public int FontIndex(FontStyle font) => InternFont(font);
+
+    /// <summary>Returns the BIFF font index associated with a cell XF index.</summary>
+    public int FontOfXf(int xfIndex) =>
+        (uint)xfIndex < (uint)_cellFormats.Count ? _cellFormats[xfIndex].FontIndex : 0;
 
     /// <summary>Maps a position in the font list onto its index in the file, skipping slot 4.</summary>
     private static int FontSlot(int position) => position < 4 ? position : position + 1;
@@ -225,7 +233,7 @@ internal sealed class StyleTable
         WriteBuiltInStyles(writer);
     }
 
-    private static void WriteFont(BiffWriter writer, FontStyle font)
+    private void WriteFont(BiffWriter writer, FontStyle font)
     {
         int start = writer.BeginRecord(BiffRecordType.Font);
         writer.AppendUInt16((int)Math.Round(font.Size * 20));
@@ -237,7 +245,7 @@ internal sealed class StyleTable
             attributes |= 0x0008;
         writer.AppendUInt16(attributes);
 
-        writer.AppendUInt16(0x7FFF);                              // Automatic colour.
+        writer.AppendUInt16(InternColor(font.Color));
         writer.AppendUInt16(font.Bold ? 700 : 400);
         writer.AppendUInt16(font.VerticalAlign switch
         {

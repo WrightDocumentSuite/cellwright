@@ -122,6 +122,8 @@ internal static class WorkbookSaver
             await writer.WriteBinaryPartAsync(
                 partPath, XlsxSchema.ContentTypeChart, chart.RawXml, cancellationToken)
                 .ConfigureAwait(false);
+            if (chart.SourcePartPath is { } sourcePartPath)
+                writer.ClonePreservedRelationships(sourcePartPath, partPath);
         }
 
         var frames = new List<DrawingWriter.ChartFrame>(drawing.Charts.Count);
@@ -454,10 +456,10 @@ internal static class WorkbookSaver
         sheet.Comments.IsModified || sheet.ThreadedComments.IsModified || sheet.Workbook.People.IsModified;
 
     /// <summary>
-    /// Decides what happens to the sheet's pictures. An untouched sheet keeps its original
+    /// Decides what happens to the sheet's drawing. An untouched sheet keeps its original
     /// drawing part, which carries across the charts, shapes and text boxes that shared it; a
-    /// change to the picture list means the part is written afresh from the model, and whatever
-    /// else was in it is gone.
+    /// change to the picture or chart list means the part is written afresh from the model.
+    /// Modelled pictures and charts survive; unmodelled shapes are reported before omission.
     /// </summary>
     private static (DrawingPlan? Plan, string? RelationshipId) PlanDrawing(
         Worksheet sheet, XlsxWriter writer, string sheetPartPath, List<OpcRelationship> relationships,

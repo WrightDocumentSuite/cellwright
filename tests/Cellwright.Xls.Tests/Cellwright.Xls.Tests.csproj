@@ -3,26 +3,29 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <RootNamespace>Cellwright.Xls.Tests</RootNamespace>
-    <!-- NPOI drags in imaging and XML-signature packages with open advisories. Nothing here
-         ships, and the fixtures it writes never leave the test host, so the audit is muted
-         for this project rather than for the library. -->
-    <NoWarn>$(NoWarn);NU1902;NU1903</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.v3.mtp-off" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <!-- The oracle the corpus is checked against: an independent reader of the same format. -->
     <PackageReference Include="ExcelDataReader" />
     <!-- A second, independent implementation: it both reads what this library writes and
-         produces the encrypted and annotated fixtures the corpus does not have. -->
+         produces encrypted and annotated fixtures. It is test-only, but it also opens the
+         external corpus, so its vulnerable transitive dependencies must not be suppressed. -->
     <PackageReference Include="NPOI" />
+    <!-- NPOI's lower bound predates current XML-signature security fixes. Keep the oracle on
+         the supported runtime implementation until NPOI raises that bound itself. -->
+    <PackageReference Include="System.Security.Cryptography.Xml" PrivateAssets="all" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" PrivateAssets="all" />
+    <PackageReference Include="SixLabors.ImageSharp" PrivateAssets="all" ExcludeAssets="build;buildTransitive" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- Runs the assembly under the culture the build asks for; see the file for why. -->
     <Compile Include="..\TestCulture.cs" Link="TestCulture.cs" />
+    <Compile Include="..\CorpusRoot.cs" Link="CorpusRoot.cs" />
   </ItemGroup>
 
   <ItemGroup>

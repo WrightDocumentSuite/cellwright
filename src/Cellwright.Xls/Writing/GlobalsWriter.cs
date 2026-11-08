@@ -292,11 +292,12 @@ internal sealed class GlobalsWriter(XlsWriteContext context, StyleTable styles)
         if (strings.Count == 0)
             return;
 
+        IReadOnlyList<(ushort CharPos, ushort FontIndex)[]?> runs = context.SharedStringRuns;
         var pieces = new SstPieceWriter(writer);
         pieces.AppendUInt32((uint)context.TotalStringReferences);
         pieces.AppendUInt32((uint)strings.Count);
-        foreach (string text in strings)
-            pieces.AppendString(text);
+        for (int i = 0; i < strings.Count; i++)
+            pieces.AppendString(strings[i], i < runs.Count ? runs[i] : null);
         pieces.Flush();
 
         WriteExtSst(writer, strings.Count);
@@ -322,19 +323,27 @@ internal sealed class GlobalsWriter(XlsWriteContext context, StyleTable styles)
         }
 
         /// <summary>Appends one string, splitting its characters across records if it has to.</summary>
-        public void AppendString(string text)
+        public void AppendString(string text, (ushort CharPos, ushort FontIndex)[]? runs = null)
         {
             bool compressed = BiffWriter.IsCompressible(text);
             int width = compressed ? 1 : 2;
+            bool hasRuns = runs is { Length: > 0 };
+            int headerBytes = hasRuns ? 5 : 3;
 
-            // The three-byte prefix is never split: a record that cannot hold it plus at least
+            // The prefix is never split: a record that cannot hold it plus at least
             // one character ends here instead.
-            if (Remaining < 4)
+            if (Remaining < headerBytes + width)
                 StartContinuation(flagsByte: null);
 
             _current.Add((byte)(text.Length & 0xFF));
             _current.Add((byte)((text.Length >> 8) & 0xFF));
-            _current.Add(compressed ? (byte)0x00 : (byte)0x01);
+            byte flags = (byte)((compressed ? 0x00 : 0x01) | (hasRuns ? 0x08 : 0x00));
+            _current.Add(flags);
+            if (hasRuns)
+            {
+                _current.Add((byte)(runs!.Length & 0xFF));
+                _current.Add((byte)((runs.Length >> 8) & 0xFF));
+            }
 
             int written = 0;
             while (written < text.Length)
@@ -355,6 +364,20 @@ internal sealed class GlobalsWriter(XlsWriteContext context, StyleTable styles)
                 }
 
                 written += take;
+            }
+
+            if (hasRuns)
+            {
+                foreach ((ushort charPos, ushort fontIndex) in runs!)
+                {
+                    if (Remaining < 4)
+                        StartContinuation(flagsByte: null);
+
+                    _current.Add((byte)(charPos & 0xFF));
+                    _current.Add((byte)((charPos >> 8) & 0xFF));
+                    _current.Add((byte)(fontIndex & 0xFF));
+                    _current.Add((byte)((fontIndex >> 8) & 0xFF));
+                }
             }
         }
 

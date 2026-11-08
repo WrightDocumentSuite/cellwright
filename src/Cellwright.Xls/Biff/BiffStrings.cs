@@ -172,8 +172,13 @@ internal static class BiffStrings
         public readonly bool HasMore => _offset < _body.Length;
 
         /// <summary>Reads the next string of the table.</summary>
-        public string ReadNext()
+        public string ReadNext() => ReadNext(out _);
+
+        /// <summary>Reads the next string of the table and any character-formatting runs attached to it.</summary>
+        public string ReadNext(out (int CharPos, int FontIndex)[]? runs)
         {
+            runs = null;
+
             // A string may end exactly on a record boundary, leaving the cursor at the seam.
             // The next record then opens with a whole string, not with a repeated flags byte.
             while (_offset >= _pieceEnd && _piece + 1 < _pieces.Count)
@@ -208,9 +213,42 @@ internal static class BiffStrings
 
             _loadBudget?.EnsureCellTextLength(characters);
             string text = ReadSplitCharacters(characters, wide);
-            Skip(runCount * 4);
+            runs = ReadRuns(runCount);
             Skip(farEastSize);
             return text;
+        }
+
+        private (int CharPos, int FontIndex)[]? ReadRuns(int runCount)
+        {
+            if (runCount <= 0)
+                return null;
+
+            int availableRuns = Math.Min(runCount, (_body.Length - _offset) / 4);
+            if (availableRuns <= 0)
+            {
+                Skip(runCount * 4);
+                return null;
+            }
+
+            var runs = new (int CharPos, int FontIndex)[availableRuns];
+            for (int i = 0; i < availableRuns; i++)
+            {
+                while (_offset >= _pieceEnd && _piece + 1 < _pieces.Count)
+                    _pieceEnd += _pieces[++_piece];
+
+                int charPos = BinaryPrimitives.ReadUInt16LittleEndian(_body[_offset..]);
+                int fontIndex = BinaryPrimitives.ReadUInt16LittleEndian(_body[(_offset + 2)..]);
+                _offset += 4;
+                runs[i] = (charPos, fontIndex);
+            }
+
+            if (runCount > availableRuns)
+                Skip((runCount - availableRuns) * 4);
+
+            while (_offset >= _pieceEnd && _piece + 1 < _pieces.Count)
+                _pieceEnd += _pieces[++_piece];
+
+            return runs;
         }
 
         /// <summary>

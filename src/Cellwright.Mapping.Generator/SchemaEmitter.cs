@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Cellwright.Mapping.Generator;
@@ -19,6 +20,12 @@ internal static class SchemaEmitter
         {
             sb.Append("namespace ").Append(model.Namespace).AppendLine(";");
             sb.AppendLine();
+        }
+
+        foreach (ContainerModel container in model.Containers.Items)
+        {
+            sb.Append("partial ").Append(container.Keyword).Append(' ').Append(container.Name).AppendLine();
+            sb.AppendLine("{");
         }
 
         string self = model.TypeName;
@@ -45,6 +52,10 @@ internal static class SchemaEmitter
         sb.AppendLine();
         EmitCellHelper(sb);
         sb.AppendLine("}");
+
+        for (int i = 0; i < model.Containers.Length; i++)
+            sb.AppendLine("}");
+
         return sb.ToString();
     }
 
@@ -96,11 +107,29 @@ internal static class SchemaEmitter
         sb.AppendLine("    {");
         for (int i = 0; i < model.Columns.Length; i++)
         {
-            sb.Append("        cells[").Append(i).Append("] = row.")
-                .Append(model.Columns[i].PropertyName).AppendLine(";");
+            ColumnModel col = model.Columns[i];
+            sb.Append("        cells[").Append(i).Append("] = ")
+                .Append(WriteExpression(col)).AppendLine(";");
         }
 
         sb.AppendLine("    }");
+    }
+
+    private static string WriteExpression(ColumnModel column)
+    {
+        string access = "row." + column.PropertyName;
+        return column.Kind switch
+        {
+            ColumnKind.Single => column.IsNullable ? $"(double?){access}" : $"(double){access}",
+            ColumnKind.Int16 or ColumnKind.Byte => column.IsNullable ? $"(int?){access}" : $"(int){access}",
+            ColumnKind.DateTimeOffset => column.IsNullable
+                ? $"{access} is {{ }} __dto ? __dto.UtcDateTime : global::Cellwright.CellValue.Blank"
+                : $"{access}.UtcDateTime",
+            ColumnKind.Guid or ColumnKind.Enum => column.IsNullable
+                ? $"{access}?.ToString()"
+                : $"{access}.ToString()",
+            _ => access,
+        };
     }
 
     private static void EmitRegisterStyles(StringBuilder sb, RowModel model, string schema)
@@ -131,23 +160,67 @@ internal static class SchemaEmitter
 
     private static string Conversion(ColumnModel column, int index)
     {
+        if (column.Kind == ColumnKind.Enum)
+        {
+            string enumMethod = column.IsNullable ? "ToEnumOrNull" : "ToEnum";
+            return $"global::Cellwright.Mapping.RowConvert.{enumMethod}<{column.EnumTypeName}>(__cwCell(cells, columnMap, {index}), {Quote(column.Header)})";
+        }
+
         string method = column.Kind switch
         {
             ColumnKind.Text => column.IsNullable ? "ToTextOrNull" : "ToText",
             ColumnKind.Double => column.IsNullable ? "ToDoubleOrNull" : "ToDouble",
+            ColumnKind.Single => column.IsNullable ? "ToSingleOrNull" : "ToSingle",
+            ColumnKind.Int16 => column.IsNullable ? "ToInt16OrNull" : "ToInt16",
+            ColumnKind.Byte => column.IsNullable ? "ToByteOrNull" : "ToByte",
             ColumnKind.Int32 => column.IsNullable ? "ToInt32OrNull" : "ToInt32",
             ColumnKind.Int64 => column.IsNullable ? "ToInt64OrNull" : "ToInt64",
             ColumnKind.Decimal => column.IsNullable ? "ToDecimalOrNull" : "ToDecimal",
             ColumnKind.Boolean => column.IsNullable ? "ToBooleanOrNull" : "ToBoolean",
             ColumnKind.DateTime => column.IsNullable ? "ToDateTimeOrNull" : "ToDateTime",
+            ColumnKind.DateTimeOffset => column.IsNullable ? "ToDateTimeOffsetOrNull" : "ToDateTimeOffset",
             ColumnKind.DateOnly => column.IsNullable ? "ToDateOnlyOrNull" : "ToDateOnly",
+            ColumnKind.TimeOnly => column.IsNullable ? "ToTimeOnlyOrNull" : "ToTimeOnly",
             ColumnKind.TimeSpan => column.IsNullable ? "ToTimeSpanOrNull" : "ToTimeSpan",
+            ColumnKind.Guid => column.IsNullable ? "ToGuidOrNull" : "ToGuid",
             _ => "ToCellValue",
         };
 
         return $"global::Cellwright.Mapping.RowConvert.{method}(__cwCell(cells, columnMap, {index}), {Quote(column.Header)})";
     }
 
-    private static string Quote(string text) =>
-        "\"" + text.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    internal static string Quote(string text)
+    {
+        var literal = new StringBuilder(text.Length + 2).Append('"');
+        foreach (char character in text)
+        {
+            switch (character)
+            {
+                case '\\': literal.Append("\\\\"); break;
+                case '"': literal.Append("\\\""); break;
+                case '\0': literal.Append("\\0"); break;
+                case '\a': literal.Append("\\a"); break;
+                case '\b': literal.Append("\\b"); break;
+                case '\f': literal.Append("\\f"); break;
+                case '\n': literal.Append("\\n"); break;
+                case '\r': literal.Append("\\r"); break;
+                case '\t': literal.Append("\\t"); break;
+                case '\v': literal.Append("\\v"); break;
+                default:
+                    if (char.IsControl(character) || char.IsSurrogate(character) || character is '\u2028' or '\u2029')
+                    {
+                        literal.Append("\\u")
+                            .Append(((int)character).ToString("X4", CultureInfo.InvariantCulture));
+                    }
+                    else
+                    {
+                        literal.Append(character);
+                    }
+
+                    break;
+            }
+        }
+
+        return literal.Append('"').ToString();
+    }
 }

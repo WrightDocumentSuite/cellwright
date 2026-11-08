@@ -546,14 +546,14 @@ internal static class EscherDrawingWriter
     /// </remarks>
     private static (ushort RecordType, int Instance, byte BlipType, bool Tagged, bool StripFileHeader)? BlipKind(
         PictureFormat format) => format switch
-    {
-        PictureFormat.Png => ((ushort)0xF01E, 0x6E0, (byte)6, true, false),
-        PictureFormat.Jpeg => ((ushort)0xF01D, 0x46A, (byte)5, true, false),
-        PictureFormat.Bmp => ((ushort)0xF01F, 0x7A8, (byte)7, true, true),
-        PictureFormat.Emf => ((ushort)0xF01A, 0x3D4, (byte)2, false, false),
-        PictureFormat.Wmf => ((ushort)0xF01B, 0x216, (byte)3, false, false),
-        _ => null,
-    };
+        {
+            PictureFormat.Png => ((ushort)0xF01E, 0x6E0, (byte)6, true, false),
+            PictureFormat.Jpeg => ((ushort)0xF01D, 0x46A, (byte)5, true, false),
+            PictureFormat.Bmp => ((ushort)0xF01F, 0x7A8, (byte)7, true, true),
+            PictureFormat.Emf => ((ushort)0xF01A, 0x3D4, (byte)2, false, false),
+            PictureFormat.Wmf => ((ushort)0xF01B, 0x216, (byte)3, false, false),
+            _ => null,
+        };
 
     /// <summary>The size of one store entry's body, header of the embedded record included.</summary>
     private static int EntryLength(ReadOnlyMemory<byte> content, PictureFormat format)

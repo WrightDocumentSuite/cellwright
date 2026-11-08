@@ -12,6 +12,8 @@
     <PackageReference Include="ClosedXML" />
     <PackageReference Include="EPPlus" />
     <PackageReference Include="ExcelDataReader" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" PrivateAssets="all" />
+    <PackageReference Include="System.Security.Cryptography.Xml" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

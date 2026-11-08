@@ -39,13 +39,6 @@ internal static class XlsbWorkbookReader
         // The parts are found through the relationships rather than by their usual names: the
         // format does not fix where they live, and a package written by another tool is free to
         // put them elsewhere.
-        if (Find(relationships, XlsxSchema.RelSharedStrings, workbookPart) is { } strings && package.PartExists(strings))
-            XlsbStringTable.Read(
-                await package.ReadPartBytesAsync(strings, cancellationToken).ConfigureAwait(false),
-                globals,
-                loadBudget,
-                cancellationToken);
-
         IReadOnlyList<DifferentialStyle> differentialStyles = [];
         if (Find(relationships, XlsxSchema.RelStyles, workbookPart) is { } styles && package.PartExists(styles))
         {
@@ -55,6 +48,15 @@ internal static class XlsbWorkbookReader
                 workbook.StylePool);
         }
         workbook.LoadedDifferentialStyles = differentialStyles;
+
+        // Shared strings are read after styles so any rich-text runs in the SST can resolve
+        // their font indexes against globals.Fonts immediately.
+        if (Find(relationships, XlsxSchema.RelSharedStrings, workbookPart) is { } strings && package.PartExists(strings))
+            XlsbStringTable.Read(
+                await package.ReadPartBytesAsync(strings, cancellationToken).ConfigureAwait(false),
+                globals,
+                loadBudget,
+                cancellationToken);
 
         var sheetNames = new List<string>(globals.Sheets.Count);
         foreach (XlsSheetEntry entry in globals.Sheets)

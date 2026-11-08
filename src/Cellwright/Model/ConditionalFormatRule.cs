@@ -239,13 +239,13 @@ public sealed class ConditionalFormatRule
 
     private static ConditionalFormatRule Comparison(
         string ranges, ConditionalOperator op, DifferentialStyle style, params string[] formulas) => new()
-    {
-        Ranges = DataValidation.ParseRanges(ranges),
-        Type = ConditionalFormatType.CellIs,
-        Operator = op,
-        Formulas = formulas,
-        Style = style,
-    };
+        {
+            Ranges = DataValidation.ParseRanges(ranges),
+            Type = ConditionalFormatType.CellIs,
+            Operator = op,
+            Formulas = formulas,
+            Style = style,
+        };
 
     private static string Number(double value) =>
         value.ToString(System.Globalization.CultureInfo.InvariantCulture);

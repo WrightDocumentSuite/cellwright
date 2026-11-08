@@ -76,18 +76,18 @@ internal readonly record struct FormatPlan
                     break;
 
                 case '[':
-                {
-                    int end = NumberFormatRenderer.SkipBracket(section, i);
-                    ReadOnlySpan<char> body = section.AsSpan(i + 1, end - i - 1);
-                    if (!body.IsEmpty && char.ToLowerInvariant(body[0]) is 'h' or 'm' or 's')
                     {
-                        temporal = true;
-                        elapsed = true;
-                    }
+                        int end = NumberFormatRenderer.SkipBracket(section, i);
+                        ReadOnlySpan<char> body = section.AsSpan(i + 1, end - i - 1);
+                        if (!body.IsEmpty && char.ToLowerInvariant(body[0]) is 'h' or 'm' or 's')
+                        {
+                            temporal = true;
+                            elapsed = true;
+                        }
 
-                    i = end;
-                    break;
-                }
+                        i = end;
+                        break;
+                    }
 
                 case 'y' or 'Y' or 'd' or 'D' or 'h' or 'H' or 's' or 'S':
                     temporal = true;

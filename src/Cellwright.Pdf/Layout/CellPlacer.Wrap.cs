@@ -135,8 +135,10 @@ internal sealed partial class CellPlacer
         int degrees = alignment.TextRotation;
         int rotation = degrees switch
         {
-            >= 1 and <= 90 => 270,
-            > 90 and <= 180 => 90,
+            90 => 270,
+            180 => 90,
+            >= 1 and < 90 => 360 - degrees,
+            > 90 and < 180 => degrees - 90,
             _ => 0,
         };
 
@@ -146,21 +148,20 @@ internal sealed partial class CellPlacer
             return;
         }
 
-        if (degrees is not (90 or 180))
-        {
-            _context.Diagnostics.Add(
-                PdfExportWarningKind.LayoutApproximated,
-                "Text turned by an angle other than a quarter turn is drawn at the nearer quarter turn.",
-                "rotation");
-        }
-
         double measured = appearance.Measure(shown);
         double strip = appearance.LineHeight;
 
         _page.Items.Add(new TextItem
         {
-            X = cell.X + ((cell.Width - strip) / 2),
-            Y = rotation == 90 ? cell.Y + Padding : cell.Bottom - Padding - measured,
+            X = rotation is 90 or 270
+                ? cell.X + ((cell.Width - strip) / 2)
+                : cell.X + (cell.Width / 2),
+            Y = rotation switch
+            {
+                90 => cell.Y + Padding,
+                270 => cell.Bottom - Padding - measured,
+                _ => cell.Y + (cell.Height / 2),
+            },
             Text = shown,
             Appearance = appearance,
             Width = measured,

@@ -1,5 +1,6 @@
 using System.Text;
 using Cellwright.Styles;
+using Cellwright.Tests.Shared;
 using Inkwright;
 using Xunit;
 
@@ -170,22 +171,13 @@ internal static class Corpus
 
         var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
         return [.. Directory.EnumerateFiles(root, pattern, options)
-            .Where(static path => !path.Contains("Cellwright", StringComparison.OrdinalIgnoreCase))
+            .Where(CorpusRoot.Includes)
             .Where(static path => new FileInfo(path).Length is > 0 and < 4 * 1024 * 1024)
             .OrderBy(static path => path, StringComparer.Ordinal)];
     }
 
     private static string? FindCorpusRoot()
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (Directory.Exists(Path.Combine(directory.FullName, "ExcelDataReader-3.9.0")))
-                return directory.FullName;
-
-            directory = directory.Parent;
-        }
-
-        return null;
+        return CorpusRoot.Find("ExcelDataReader-3.9.0");
     }
 }

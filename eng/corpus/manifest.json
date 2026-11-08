@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "archives": [
+    {
+      "name": "ClosedXML 0.105.0",
+      "repository": "https://github.com/ClosedXML/ClosedXML",
+      "revision": "d15f6690886801980c0d83b7eb1d1b5d2171ad31",
+      "url": "https://codeload.github.com/ClosedXML/ClosedXML/tar.gz/d15f6690886801980c0d83b7eb1d1b5d2171ad31",
+      "sha256": "5c07773341e1c5d8ed33c5d5be97fd2f3dfa77e0f470e21594b7b65aad84a867",
+      "destination": "ClosedXML-0.105.0"
+    },
+    {
+      "name": "ExcelDataReader 3.9.0",
+      "repository": "https://github.com/ExcelDataReader/ExcelDataReader",
+      "revision": "f3343f5524518923bdeb4801e5003c0417fd35f3",
+      "url": "https://codeload.github.com/ExcelDataReader/ExcelDataReader/tar.gz/f3343f5524518923bdeb4801e5003c0417fd35f3",
+      "sha256": "f673467087a70e3784b0e9c1e03474b149d3655041d533c563ee26588a1fc0ae",
+      "destination": "ExcelDataReader-3.9.0"
+    },
+    {
+      "name": "EPPlus 5.8.14",
+      "repository": "https://github.com/EPPlusSoftware/EPPlus",
+      "revision": "53d66bb879f48a4b5ea302a642739c737f5440c1",
+      "url": "https://codeload.github.com/EPPlusSoftware/EPPlus/tar.gz/53d66bb879f48a4b5ea302a642739c737f5440c1",
+      "sha256": "2a87691b0f24c8d1dbb971f3fc2b9c78e20109f74de9d46419ec3601c8559852",
+      "destination": "EPPlus-5.8.14"
+    },
+    {
+      "name": "EPPlus 6.2.19",
+      "repository": "https://github.com/EPPlusSoftware/EPPlus",
+      "revision": "b52748852acf1e93190a91158d5a79c6098d801d",
+      "url": "https://codeload.github.com/EPPlusSoftware/EPPlus/tar.gz/b52748852acf1e93190a91158d5a79c6098d801d",
+      "sha256": "a6cbaabe3607bd072359025d4a049afa0cbd77d0689cb328894568befedddaa4",
+      "destination": "EPPlus-6.2.19"
+    },
+    {
+      "name": "EPPlus 7.7.3",
+      "repository": "https://github.com/EPPlusSoftware/EPPlus",
+      "revision": "90ca6d6329719f61c68f6f6a2c256b0391952c82",
+      "url": "https://codeload.github.com/EPPlusSoftware/EPPlus/tar.gz/90ca6d6329719f61c68f6f6a2c256b0391952c82",
+      "sha256": "422d8a91bb103a9168965af0336c7fbb7a703c3ee07b708dc8b68e20a5866707",
+      "destination": "EPPlus-7.7.3"
+    },
+    {
+      "name": "EPPlus 8.6.2",
+      "repository": "https://github.com/EPPlusSoftware/EPPlus",
+      "revision": "d8416ee1c78423f478a891b0b2112da6e0919e48",
+      "url": "https://codeload.github.com/EPPlusSoftware/EPPlus/tar.gz/d8416ee1c78423f478a891b0b2112da6e0919e48",
+      "sha256": "0689a01e062ae3be10b59c77afcda43c62995aa368e8992c99d9fd38bb1e64b5",
+      "destination": "EPPlus-8.6.2"
+    },
+    {
+      "name": "NPOI 1.2.2 source corpus",
+      "repository": "https://github.com/dotnetcore/NPOI",
+      "revision": "ff8798d5715023bfd976cf460dc057f70318ec2f",
+      "url": "https://codeload.github.com/dotnetcore/NPOI/tar.gz/ff8798d5715023bfd976cf460dc057f70318ec2f",
+      "sha256": "0ee666213e91aa813759eebbaeae1aaaf83a4efe0970bd9d0fabbbe8fe78da6a",
+      "destination": "NPOI-1.2.2"
+    },
+    {
+      "name": "NPOI 2.7.6-rc1 source corpus",
+      "repository": "https://github.com/nissl-lab/npoi",
+      "revision": "a0f50a01a845aa4dd793cee0ac5b776745966cb6",
+      "url": "https://codeload.github.com/nissl-lab/npoi/tar.gz/a0f50a01a845aa4dd793cee0ac5b776745966cb6",
+      "sha256": "b86a87410551372e7476575ca5fbb3dd16a53a6c8f9d419206bf7ad9b3ca03a3",
+      "destination": "npoi-2.7.6-rc1"
+    }
+  ],
+  "minimumFiles": {
+    "*.xls": 800,
+    "*.xlsb": 50,
+    "*.xlsx": 950,
+    "*.xlsm": 20
+  },
+  "requiredFiles": [
+    "10x10.xlsb",
+    "10x10000.xlsb",
+    "15228.xls",
+    "19599-1.xls",
+    "31749.xls",
+    "44010-SingleChart.xls",
+    "44010-TwoCharts.xls",
+    "46368.xls",
+    "ChartsheetAndPivotTable.xlsx",
+    "Control.xlsm",
+    "DrawingAndComments.xls",
+    "drawings.xls",
+    "EmbeddedChartHeaderTest.xls",
+    "ExcelDataset.xls",
+    "FileWithButton.xlsm",
+    "Issue242_StdRc4PwdPassword.xls",
+    "Issue242_XorPwdPassword.xls",
+    "Issue477_CryptoKeylength40.xls",
+    "MySheets.ods",
+    "NewStyleConditionalFormattings.xls",
+    "OldIssue11573_BlankValues.xls",
+    "SimpleWithComments.xls",
+    "VBADecompressBug.xlsm",
+    "WithConditionalFormatting.xls",
+    "agile_AES128_SHA1_CBC_pwd_password.xlsx",
+    "agile_AES256_SHA512_CBC_pwd_password.xlsx",
+    "standard_AES256_SHA1_ECB_pwd_password.xlsx"
+  ],
+  "fuzzSeeds": [
+    "SimpleWithComments.xls",
+    "10x10.xlsb",
+    "ChartsheetAndPivotTable.xlsx",
+    "agile_AES128_SHA1_CBC_pwd_password.xlsx"
+  ],
+  "allowedSkippedTests": [
+    "Cellwright.Pdf.Tests.ExportBasicsTests.InstalledTimesNewRomanFacesKeepTheirExcelMetricsWithoutSubstitution"
+  ],
+  "minimumResultsByFile": {
+    "Cellwright.Tests.trx": 640,
+    "Cellwright.Formulas.Tests.trx": 890,
+    "Cellwright.Mapping.Tests.trx": 9,
+    "Cellwright.Pdf.Tests.trx": 200,
+    "Cellwright.Xls.Tests.trx": 295
+  },
+  "minimumTestResults": 2000
+}

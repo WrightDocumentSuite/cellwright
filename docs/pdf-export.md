@@ -96,6 +96,7 @@ Workbook book = await Workbook.LoadAsync("report.xlsx");
 
 book.Sheets[0].AutoFit();                                  // columns, then rows
 book.Sheets[0].AutoFitColumns(new AutoFitOptions { MaxWidth = 40 });
+book.Sheets[0].AutoFitRows(new AutoFitOptions { IncludeMergedCells = true });
 book.Sheets[0].Column("B").AutoFit();                      // one column
 book.AutoFit();                                            // whole book, one font set for all sheets
 
@@ -109,14 +110,20 @@ What does not participate in width fitting, and why:
 
 - **Wrapped cell.** It sets its row height, not column width: fitting the column to it would undo the
   wrap the author asked for.
-- **Merged cell.** Its text belongs to a rectangle, not one column. Excel also leaves merges out of
-  AutoFit.
+- **Merged cell.** Its text belongs to a rectangle, not one column. It never participates in width
+  fitting. Row fitting also ignores it by default, matching Excel; set `IncludeMergedCells` to
+  measure its text against the combined visible width of the merged range.
 - **Hidden row.** A row that was hidden is not fitted to the grid. `IncludeHiddenRows` includes it
   again if that is still needed.
 
 `AutoFitRows` differs from what printing measures: printing only raises a row with no declared height
 — Excel already measured it and the author saw that number — while an explicit call sets height for
 every row it measured. Calling AutoFit means asking to change them.
+
+For a horizontal merge, merged-cell fitting sets the one row to the measured height. If a merge
+spans several rows, their combined existing height is kept when it already fits; otherwise the
+anchor row, then following rows, grow up to `MaxHeight` until the missing height is supplied. This
+avoids flattening deliberate row proportions merely because a merge crosses them.
 
 `SampleRows` limits measurement to the first N rows. On a twenty-thousand-row sheet that is the
 difference between 112 ms and 31 ms, and the answer is usually decided by the first few hundred rows.
@@ -131,7 +138,8 @@ another is drawn.
 ## Charts
 
 Embedded charts are drawn: title, axes with round ticks and grid, category labels, legend, and the
-series themselves — columns, bars, lines, areas, pie, and doughnut. Points come from `numCache`/
+series themselves — columns, bars, lines, areas, scatters (with X-Y numeric coordinate mapping and
+point markers), radar spider-web polygons, pie, and doughnut. Points come from `numCache`/
 `strCache` caches carried by the file; a series without caches is read from live cells through a
 reference. Series colors are book theme accents, in rotation.
 
@@ -237,15 +245,18 @@ behind a clip path but omits them, otherwise search would find text not on the p
 space runs out. A row with no height in the file grows for wrapped lines; a row with a set height
 keeps it, and extra lines simply do not print — Excel does the same.
 
-**Rotation.** Quarter turns in either direction use one matrix; intermediate angles — nearest quarter
-with diagnostics. Rotation 255 is letters stacked vertically, each under the previous.
+**Rotation.** Quarter turns (90° and 180° in Excel's `TextRotation` encoding) and arbitrary diagonal
+angles (1°–89° anticlockwise and 91°–179° clockwise) are drawn with an exact rotation matrix around the
+cell's text box. Rotation 255 is letters stacked vertically, each under the previous.
 
 **Merges.** A merged cell draws once over its whole area, even if its empty tail extends past the
 used range.
 
-**Decoration.** Cell fill, grid (`PrintGridLines`), and cell borders — in that order so nothing
-paints over what came before. Pattern fill currently draws as the pattern color. An external
-hyperlink becomes an annotation.
+**Decoration.** Row and column headings (`PrintHeadings`), cell fill, grid (`PrintGridLines`), and cell
+borders — in that order so nothing paints over what came before. Pattern fill currently draws as the
+pattern color. External hyperlinks become URI link annotations; internal workbook links (`Sheet!A1`,
+`#Sheet!A1`, or defined names) become page-destination link annotations when the target sheet is
+printed, or report `internal-link` when the target is not printed.
 
 **Pages.** The grid is cut in both directions at once: columns into strips by paper width, rows by
 paper height, and each strip pair is a page. Manual breaks are hard edges. Repeating rows and columns
@@ -264,11 +275,14 @@ and for even pages — by flags `DifferentFirstPage` and `DifferentOddEven`; emp
 set means a page without that header, not “use the usual one”. Each sheet counts its own pages: `&P`
 shows the number within the sheet, as in Excel.
 
-**Pictures.** JPEG and PNG embed without recompression. A picture anchored to two cells stretches to
+**Pictures and charts.** JPEG and PNG embed without recompression. A picture anchored to two cells stretches to
 the actual grid; anchored to one keeps its size; anchored to nothing sits where it was placed on the
 sheet. A picture crossed by a page break is drawn on both pages, each clipping to its edge — on the
 first and last strip the edge is the paper itself, so a picture wider than its columns is not
-clipped. Hidden pictures are not drawn; formats that cannot embed go into diagnostics.
+clipped. Hidden pictures are not drawn; formats that cannot embed go into diagnostics. Embedded
+charts (`Column`, `Bar`, `Line`, `Pie`, `Doughnut`, `Area`, `Scatter`, `Bubble`, `Radar`, and
+combined Cartesian charts) are drawn into their anchor rectangles from cached or live worksheet
+cells.
 
 **Links.** The click area is an annotation, not a mark in the content stream, so page scale and
 centering are baked into its rectangle: the area stays over its cell at any `Scale` and
@@ -342,16 +356,15 @@ draft mode give one warning, not three.
   Kinds the renderer does not know (`chart-Unknown`) are skipped with diagnostics.
 - **Classic notes** (`comment`) and **threaded comments with replies** (`threaded-comments`) in the
   default print-like mode; set `IncludeComments` for interactive annotations.
-- **Row and column headings** (`print-headings`) when the sheet asks to print them.
 - **Pattern fills** (`pattern-fill`) draw as the pattern’s solid color.
-- **Intermediate rotation angles** (`rotation`) round to the nearest quarter turn.
 - **`Draft` and `BlackAndWhite`** do not affect output.
 - **Header at scale** (`header-scale`) draws full size even when the sheet asks to scale it with the
   body; **`AlignHeaderWithMargins`** (`header-margins`) is not disabled.
 - **Right-to-left sheet** (sheet-level `bidiVisual`): cell text direction is correct, but the grid
   itself is not mirrored.
 - **Picture in header/footer** (`&G`).
-- **Link within the book**: in a stack of pages it has nowhere to point.
+- **Link to an unprinted sheet or unresolved name** (`internal-link`): when the target sheet is hidden
+  or excluded by `SheetSelection`, the link has no destination page in the PDF.
 - **Unknown paper code** (`paper-<code>`) prints on A4.
 
 ## Cost

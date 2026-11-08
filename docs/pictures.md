@@ -82,14 +82,17 @@ directly.
 
 ## Writing
 
-Writing is supported only to xlsx; `.xlsb` is not written at all, and pictures are not carried into
-`.xls`.
+Writing is supported to xlsx and `.xls`; `.xlsb` is not written at all. The BIFF8 writer emits PNG,
+JPEG, BMP, EMF and WMF images into a shared workbook image store. GIF and TIFF cannot be represented
+there and produce `PictureFormatNotWritten` through the save warning callback.
 
-A sheet whose pictures were not touched preserves **the original drawing part byte for byte** —
+In xlsx, a sheet whose pictures were not touched preserves **the original drawing part byte for byte** —
 together with charts, autoshapes, and text boxes that lived beside them. Once the collection is
-changed, the part is rebuilt from the model, and everything the model does not represent disappears
-from it. If the original part held more than images, save reports `DrawingShapesNotWritten` through
-`SaveOptions.OnWarning` — such loss cannot be silent.
+changed, the part is rebuilt from the picture and chart models. Pictures and embedded charts remain;
+autoshapes, text boxes, and other unmodelled anchors disappear. If the original part held any of
+those, save reports `DrawingShapesNotWritten` through `SaveOptions.OnWarning` — such loss cannot be
+silent. Copying a sheet uses the same boundary: modelled pictures and charts get independent anchors,
+while source-only drawing content is reported as `SheetCopyContentNotCopied`.
 
 ## Theme colors
 
@@ -120,14 +123,17 @@ palette; with type 3 — to a theme slot with tint. Previously both read as "aut
 
 ## Deliberate limitations
 
-- **Charts, autoshapes, text boxes, and SmartArt are not modeled.** They survive with an untouched
-  drawing part and are lost if the sheet's pictures are changed.
-- **Writing pictures to `.xls` is not supported**; nothing is written to xlsb either.
+- **Autoshapes, text boxes, and SmartArt are not modeled.** Embedded charts are read and written;
+  the other drawing objects survive only with an untouched drawing part and are reported if a
+  picture/chart edit or sheet copy must rebuild it.
+- **GIF and TIFF are not written to `.xls`**; no pictures are written to xlsb because there is no
+  xlsb writer.
 - **WMF and EMF are not rendered** — bytes are returned as-is; nothing interprets them.
 - **Crop, rotation, effects, and transparency** are not read: the model knows where a picture is and
   what is in it, not how it was styled.
-- **One image on two sheets is written twice.** A shared part would be smaller, but then removing the
-  picture from one sheet could zero it on the other.
+- **In xlsx, one image on two sheets is written twice.** A shared part would be smaller, but then
+  removing the picture from one sheet could zero it on the other. The `.xls` writer instead uses
+  the format's workbook-wide image store.
 
 ## How this is verified
 

@@ -12,7 +12,9 @@ namespace Cellwright.Xls.Writing;
 internal sealed class XlsWriteContext(Workbook workbook, Action<WorkbookWarning> warn)
 {
     private readonly Dictionary<string, int> _sharedStrings = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string Text, string Markup, int DefaultFont), int> _sharedRichStrings = [];
     private readonly List<string> _sharedStringList = [];
+    private readonly List<(ushort CharPos, ushort FontIndex)[]?> _sharedStringRuns = [];
     private readonly Dictionary<string, int> _externSheets = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<int> _externSheetTargets = [];
     private readonly Dictionary<string, int> _nameIndexes = new(StringComparer.OrdinalIgnoreCase);
@@ -42,6 +44,9 @@ internal sealed class XlsWriteContext(Workbook workbook, Action<WorkbookWarning>
     /// <summary>The unique shared strings, in the order the SST will write them.</summary>
     public IReadOnlyList<string> SharedStrings => _sharedStringList;
 
+    /// <summary>Character-formatting runs parallel to <see cref="SharedStrings"/>.</summary>
+    public IReadOnlyList<(ushort CharPos, ushort FontIndex)[]?> SharedStringRuns => _sharedStringRuns;
+
     /// <summary>The sheets each ExternSheet entry points at, in order.</summary>
     public IReadOnlyList<int> ExternSheetTargets => _externSheetTargets;
 
@@ -61,6 +66,37 @@ internal sealed class XlsWriteContext(Workbook workbook, Action<WorkbookWarning>
         index = _sharedStringList.Count;
         _sharedStrings[text] = index;
         _sharedStringList.Add(text);
+        _sharedStringRuns.Add(null);
+        return index;
+    }
+
+    /// <summary>Interns a rich-text string and its formatting runs into the shared table.</summary>
+    public int InternRichString(RichText richText, string markup, int defaultFontIndex)
+    {
+        TotalStringReferences++;
+        string text = richText.Text;
+        var key = (text, markup, defaultFontIndex);
+        if (_sharedRichStrings.TryGetValue(key, out int index))
+            return index;
+
+        var runs = new List<(ushort CharPos, ushort FontIndex)>(richText.Count);
+        int charPos = 0;
+        foreach (RichTextRun run in richText)
+        {
+            if (run.Text.Length == 0)
+                continue;
+
+            int fontIndex = run.Font is { } font
+                ? StyleTable.FontIndex(font)
+                : defaultFontIndex;
+            runs.Add(((ushort)charPos, (ushort)fontIndex));
+            charPos += run.Text.Length;
+        }
+
+        index = _sharedStringList.Count;
+        _sharedRichStrings[key] = index;
+        _sharedStringList.Add(text);
+        _sharedStringRuns.Add(runs.Count > 0 ? [.. runs] : null);
         return index;
     }
 

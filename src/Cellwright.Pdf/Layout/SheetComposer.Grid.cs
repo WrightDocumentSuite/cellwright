@@ -18,10 +18,19 @@ internal sealed partial class SheetComposer
 
     private void DrawBand(ComposedPage page, SheetPlan plan, GridMeasurer grid, Band columns, Band rows)
     {
-        PageSlots columnSlots = Slots(plan.TitleColumns, plan.Columns, columns, grid, horizontal: true);
-        PageSlots rowSlots = Slots(plan.TitleRows, plan.Rows, rows, grid, horizontal: false);
+        double headingWidth = _setup.PrintHeadings ? RowHeadingBandWidth(plan, grid) : 0;
+        double headingHeight = _setup.PrintHeadings ? ColumnHeadingBandHeight(grid) : 0;
 
-        Place(page, columnSlots, rowSlots);
+        PageSlots columnSlots = Slots(plan.TitleColumns, plan.Columns, columns, grid, horizontal: true, headingWidth);
+        PageSlots rowSlots = Slots(plan.TitleRows, plan.Rows, rows, grid, horizontal: false, headingHeight);
+
+        page.ColumnSlots = columnSlots;
+        page.RowSlots = rowSlots;
+
+        Place(page, columnSlots, rowSlots, headingWidth, headingHeight);
+
+        if (_setup.PrintHeadings)
+            DrawHeadings(page, grid, columnSlots, rowSlots, headingWidth, headingHeight);
 
         var cells = new CellPlacer(_context, _sheet, grid, page, columnSlots, rowSlots)
         {
@@ -108,7 +117,7 @@ internal sealed partial class SheetComposer
     /// The slots of one axis: the repeated titles first, then the band, each with the position
     /// its near edge falls at once the page origin is known.
     /// </summary>
-    private static PageSlots Slots(int[] titles, int[] lines, Band band, GridMeasurer grid, bool horizontal)
+    private static PageSlots Slots(int[] titles, int[] lines, Band band, GridMeasurer grid, bool horizontal, double startOffset = 0)
     {
         List<int> ordered = [];
         foreach (int title in titles)
@@ -134,7 +143,7 @@ internal sealed partial class SheetComposer
             Last = band.From + band.Count >= lines.Length,
         };
 
-        double at = 0;
+        double at = startOffset;
         for (int i = 0; i < ordered.Count; i++)
         {
             slots.Near[i] = at;
@@ -149,18 +158,104 @@ internal sealed partial class SheetComposer
     /// Puts the grid on the page: at the top-left of the printed area, or centred in it when the
     /// sheet asks. The offset is applied once, when the page is drawn, rather than to every item.
     /// </summary>
-    private void Place(ComposedPage page, PageSlots columns, PageSlots rows)
+    private void Place(ComposedPage page, PageSlots columns, PageSlots rows, double headingWidth, double headingHeight)
     {
         double x = _geometry.ContentLeft;
         double y = _geometry.ContentTop;
 
+        double totalWidth = headingWidth + columns.Extent;
+        double totalHeight = headingHeight + rows.Extent;
+
         if (_setup.CenterHorizontally)
-            x += Math.Max(0, (_geometry.ContentWidth - (columns.Extent * page.Scale)) / 2);
+            x += Math.Max(0, (_geometry.ContentWidth - (totalWidth * page.Scale)) / 2);
 
         if (_setup.CenterVertically)
-            y += Math.Max(0, (_geometry.ContentHeight - (rows.Extent * page.Scale)) / 2);
+            y += Math.Max(0, (_geometry.ContentHeight - (totalHeight * page.Scale)) / 2);
 
         page.Offset = (x, y);
+    }
+
+    private static void DrawHeadings(
+        ComposedPage page,
+        GridMeasurer grid,
+        PageSlots columns,
+        PageSlots rows,
+        double headingWidth,
+        double headingHeight)
+    {
+        if (columns.Count == 0 || rows.Count == 0)
+            return;
+
+        PdfColor fill = PdfColor.Rgb(0.95f, 0.95f, 0.95f);
+        TextAppearance appearance = grid.Appearances.Standard;
+        double right = columns.Far(columns.Count - 1);
+        double bottom = rows.Far(rows.Count - 1);
+
+        // Corner box + column header strip + row header strip fills
+        page.Items.Add(new FillItem { X = 0, Y = 0, Width = right, Height = headingHeight, Color = fill });
+        page.Items.Add(new FillItem { X = 0, Y = headingHeight, Width = headingWidth, Height = bottom - headingHeight, Color = fill });
+
+        // Column letters
+        for (int c = 0; c < columns.Count; c++)
+        {
+            double x = columns.Near[c];
+            double w = columns.Size[c];
+            string label = ColumnName.Format(columns.Lines[c]);
+            double textWidth = appearance.Measure(label);
+            double textX = x + ((w - textWidth) / 2);
+            double textY = (headingHeight - appearance.LineHeight) / 2;
+
+            page.Items.Add(new TextItem
+            {
+                X = textX,
+                Y = textY,
+                Text = label,
+                Appearance = appearance,
+                Width = textWidth,
+                Height = appearance.LineHeight,
+                Clip = (x, 0, x + w, headingHeight),
+            });
+        }
+
+        // Row numbers
+        for (int r = 0; r < rows.Count; r++)
+        {
+            double y = rows.Near[r];
+            double h = rows.Size[r];
+            string label = rows.Lines[r].ToString(System.Globalization.CultureInfo.InvariantCulture);
+            double textWidth = appearance.Measure(label);
+            double textX = (headingWidth - textWidth) / 2;
+            double textY = y + ((h - appearance.LineHeight) / 2);
+
+            page.Items.Add(new TextItem
+            {
+                X = textX,
+                Y = textY,
+                Text = label,
+                Appearance = appearance,
+                Width = textWidth,
+                Height = appearance.LineHeight,
+                Clip = (0, y, headingWidth, y + h),
+            });
+        }
+
+        // Heading grid lines
+        page.Items.Add(Line(0, 0, right, 0));
+        page.Items.Add(Line(0, headingHeight, right, headingHeight));
+        page.Items.Add(Line(0, 0, 0, bottom));
+        page.Items.Add(Line(headingWidth, 0, headingWidth, bottom));
+
+        for (int c = 0; c <= columns.Count; c++)
+        {
+            double x = c == columns.Count ? right : columns.Near[c];
+            page.Items.Add(Line(x, 0, x, headingHeight));
+        }
+
+        for (int r = 0; r <= rows.Count; r++)
+        {
+            double y = r == rows.Count ? bottom : rows.Near[r];
+            page.Items.Add(Line(0, y, headingWidth, y));
+        }
     }
 
     /// <summary>

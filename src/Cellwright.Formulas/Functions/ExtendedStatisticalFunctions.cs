@@ -109,30 +109,30 @@ internal static class ExtendedStatisticalFunctions
             case MomentKind.SquaredDeviation:
                 return FormulaValue.Number(second);
             case MomentKind.Skewness:
-            {
-                if (n < 3 || second == 0)
-                    return FormulaValue.Error(ExcelError.DivisionByZero);
-                double s = Math.Sqrt(second / (n - 1));
-                return FormulaValue.Number(n / ((n - 1.0) * (n - 2)) * (third / (s * s * s)));
-            }
+                {
+                    if (n < 3 || second == 0)
+                        return FormulaValue.Error(ExcelError.DivisionByZero);
+                    double s = Math.Sqrt(second / (n - 1));
+                    return FormulaValue.Number(n / ((n - 1.0) * (n - 2)) * (third / (s * s * s)));
+                }
 
             case MomentKind.SkewnessPopulation:
-            {
-                if (n < 3 || second == 0)
-                    return FormulaValue.Error(ExcelError.DivisionByZero);
-                double sigma = Math.Sqrt(second / n);
-                return FormulaValue.Number(third / n / (sigma * sigma * sigma));
-            }
+                {
+                    if (n < 3 || second == 0)
+                        return FormulaValue.Error(ExcelError.DivisionByZero);
+                    double sigma = Math.Sqrt(second / n);
+                    return FormulaValue.Number(third / n / (sigma * sigma * sigma));
+                }
 
             default:
-            {
-                if (n < 4 || second == 0)
-                    return FormulaValue.Error(ExcelError.DivisionByZero);
-                double s2 = second / (n - 1);
-                double a = (double)n * (n + 1) / ((n - 1.0) * (n - 2) * (n - 3));
-                double b = 3.0 * (n - 1) * (n - 1) / ((n - 2.0) * (n - 3));
-                return FormulaValue.Number((a * (fourth / (s2 * s2))) - b);
-            }
+                {
+                    if (n < 4 || second == 0)
+                        return FormulaValue.Error(ExcelError.DivisionByZero);
+                    double s2 = second / (n - 1);
+                    double a = (double)n * (n + 1) / ((n - 1.0) * (n - 2) * (n - 3));
+                    double b = 3.0 * (n - 1) * (n - 1) / ((n - 2.0) * (n - 3));
+                    return FormulaValue.Number((a * (fourth / (s2 * s2))) - b);
+                }
         }
     }
 
