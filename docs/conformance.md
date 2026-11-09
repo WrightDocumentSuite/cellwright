@@ -98,3 +98,11 @@ it.
   together.
 - **Synthetic fixtures** where the corpus is silent: hyperlink flag combinations nobody saved,
   encryption descriptors with foreign algorithms, packages with part names at the edge of the rules.
+
+## Encrypted-package mutation checks
+
+The encrypted-write integrity test checks for `PackageIntegrityFailed` after a
+ciphertext mutation. Fresh salts and keys make the downstream damage vary: a
+mutation may break ZIP framing or XML inside an otherwise readable ZIP entry.
+The test accepts either parsing failure while still requiring the integrity
+diagnostic; the particular parser exception is not the integrity assertion.

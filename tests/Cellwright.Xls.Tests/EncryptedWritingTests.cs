@@ -210,9 +210,10 @@ public sealed class EncryptedWritingTests
                 new XlsLoadOptions { Password = Password, OnWarning = warnings.Add },
                 TestContext.Current.CancellationToken);
         }
-        catch (Exception exception) when (exception is XlsxFormatException or InvalidDataException)
+        catch (Exception exception) when (exception is XlsxFormatException or InvalidDataException or System.Xml.XmlException)
         {
-            // Flipping ciphertext ruins a block of the zip inside; the warning comes first.
+            // Random ciphertext damage can break ZIP framing or the XML inside a valid entry.
+            // Both failures happen after the integrity warning, which must still be asserted.
         }
 
         Assert.Contains(warnings, static warning => warning.Code == "PackageIntegrityFailed");
