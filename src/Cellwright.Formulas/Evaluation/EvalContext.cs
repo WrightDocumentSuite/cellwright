@@ -112,6 +112,14 @@ internal sealed class EvalContext
         return entry.Program;
     }
 
+    /// <summary>Forgets compiled nested programs, whose sheet bindings a structural change has outdated.</summary>
+    internal void ClearPrograms()
+    {
+        _namePrograms.Clear();
+        _dynamicPrograms.Clear();
+        _dynamicLru.Clear();
+    }
+
     /// <summary>Programs retained outside the engine's primary formula cache.</summary>
     internal int NestedProgramCount => _namePrograms.Count + _dynamicPrograms.Count;
 

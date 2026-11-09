@@ -55,6 +55,9 @@ public sealed class DefinedNameCollection : IReadOnlyCollection<DefinedName>
     /// <inheritdoc/>
     public int Count => _names.Count;
 
+    /// <summary>Raised when a name is added, removed or pointed somewhere else.</summary>
+    internal Action? Changed { get; set; }
+
     /// <summary>Adds or replaces a name.</summary>
     /// <param name="name">Name as used in formulas.</param>
     /// <param name="refersTo">Target formula, e.g. <c>Sheet1!$A$1</c>.</param>
@@ -69,11 +72,13 @@ public sealed class DefinedNameCollection : IReadOnlyCollection<DefinedName>
         if (Find(name, scope) is { } existing)
         {
             existing.RefersTo = refersTo;
+            Changed?.Invoke();
             return existing;
         }
 
         var defined = new DefinedName(name, refersTo, scope);
         _names.Add(defined);
+        Changed?.Invoke();
         return defined;
     }
 
@@ -113,8 +118,14 @@ public sealed class DefinedNameCollection : IReadOnlyCollection<DefinedName>
     }
 
     /// <summary>Removes a definition. Returns whether anything was removed.</summary>
-    public bool Remove(string name, Worksheet? scope = null) =>
-        Find(name, scope) is { } defined && _names.Remove(defined);
+    public bool Remove(string name, Worksheet? scope = null)
+    {
+        if (Find(name, scope) is not { } defined || !_names.Remove(defined))
+            return false;
+
+        Changed?.Invoke();
+        return true;
+    }
 
     /// <inheritdoc/>
     public IEnumerator<DefinedName> GetEnumerator() => _names.GetEnumerator();

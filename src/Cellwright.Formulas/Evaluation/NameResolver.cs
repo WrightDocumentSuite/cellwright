@@ -8,7 +8,7 @@ namespace Cellwright.Formulas;
 /// </summary>
 internal static class NameResolver
 {
-    private const int MaxNameDepth = 8;
+    internal const int MaxNameDepth = 8;
 
     /// <summary>Evaluates what a name refers to, or returns <c>#NAME?</c> when it is unknown.</summary>
     public static FormulaValue Resolve(string name, EvalContext context)

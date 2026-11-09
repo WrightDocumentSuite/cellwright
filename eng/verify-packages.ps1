@@ -1,9 +1,9 @@
 [CmdletBinding()]
 param(
     [string] $PackageVersion,
-    [string] $BaseVersion = '0.1.4',
+    [string] $BaseVersion = '0.1.5',
     [string] $BaselineVersion = '0.1.4',
-    [string] $InkwrightVersion = '0.1.4',
+    [string] $InkwrightVersion = '0.1.5',
     [string] $RuntimeIdentifier,
     [switch] $AllowStablePackageVersion,
     [switch] $SkipSourceLinkContentCheck,

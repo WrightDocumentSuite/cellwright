@@ -134,7 +134,7 @@
       "cellwright.mapping": {
         "type": "Project",
         "dependencies": {
-          "Cellwright": "[0.1.4, )"
+          "Cellwright": "[0.1.5, )"
         }
       },
       "cellwright.mapping.generator": {

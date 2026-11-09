@@ -207,7 +207,10 @@ sheet.Tables.Add(new ExcelTable
 
 Column names come from the header row; empty header cells become `Column2`, `Column3`, and so on,
 as in Excel. Table filter state and calculated-column formulas are not modeled: an untouched table
-keeps them in its part; any change to the sheet’s table list regenerates parts from the model.
+keeps them in its part; any change to a table or to the sheet’s table list regenerates parts from
+the model, which loses them. Assigning `Range` can add or remove rows, but not change the width,
+because the column definitions would no longer match. Inserting or deleting a column inside a table
+updates its definitions and header row, and a new column gets a generated `ColumnN` name.
 Structured references (`Table[Column]`, `Table[[#Headers],[Column]]`, `Table[[#Totals],[Column]]`,
 `Table[@Column]`) are evaluated by `Cellwright.Formulas`.
 

@@ -33,9 +33,10 @@ internal static class WorksheetEditor
         RetargetFormulas(sheet.Workbook, shift);
         DropStaleMarkup(sheet, rows, index, count);
 
-        // The engine treats a structural edit as a reason to rebuild its graph from scratch,
-        // which is exactly right here: every coordinate it recorded has moved.
-        sheet.RaiseCellChanged(new CellRef(rows ? index : 1, rows ? 1 : index), structural: true);
+        // The engine rebuilds its graph from scratch, which is exactly right here: every
+        // coordinate it recorded has moved. This is not a cell edit, and must not be read as
+        // somebody typing into whichever spill happens to cover the insertion point.
+        sheet.Workbook.NotifyStructureChanged();
     }
 
     private static void ShiftGrids(Worksheet sheet, bool rows, int index, int count)
@@ -135,6 +136,7 @@ internal static class WorksheetEditor
             range.Ranges = MoveAll(range.Ranges, shift);
 
         ShiftTables(sheet, shift);
+        ShiftSpills(sheet, shift);
         ShiftAutoFilter(sheet, shift);
         sheet.FormulaGroups.Clear();
     }
@@ -178,7 +180,7 @@ internal static class WorksheetEditor
             if (shift.TryApply(ref range) && range.Start.Row != range.End.Row)
             {
                 changed |= range != table.Range;
-                table.Range = range;
+                table.Reshape(range, ColumnsAfterShift(sheet, table, range, shift));
                 continue;
             }
 
@@ -189,6 +191,90 @@ internal static class WorksheetEditor
 
         if (changed)
             sheet.Tables.MarkModified();
+    }
+
+    /// <summary>
+    /// The column definitions for a table's new shape. Rows and columns that only move it leave
+    /// them alone; a column edit inside it adds or drops definitions, and Excel requires a new
+    /// column to have a name in the header row that matches its definition.
+    /// </summary>
+    private static IReadOnlyList<string> ColumnsAfterShift(
+        Worksheet sheet, ExcelTable table, RangeRef range, in ReferenceShift shift)
+    {
+        RangeRef original = table.Range;
+        if (shift.Rows || range.ColumnCount == original.ColumnCount)
+            return table.Columns;
+
+        if (shift.Count < 0)
+        {
+            int removedEnd = shift.Index - shift.Count - 1;
+            List<string> kept = [];
+            for (int i = 0; i < table.Columns.Count; i++)
+            {
+                int column = original.Start.Column + i;
+                if (column < shift.Index || column > removedEnd)
+                    kept.Add(table.Columns[i]);
+            }
+
+            return kept;
+        }
+
+        List<string> columns = [.. table.Columns];
+        var used = new HashSet<string>(columns, StringComparer.OrdinalIgnoreCase);
+        int position = shift.Index - original.Start.Column;
+        int suffix = 1;
+
+        for (int i = 0; i < shift.Count; i++)
+        {
+            string name;
+            do
+            {
+                name = $"Column{suffix++}";
+            }
+            while (!used.Add(name));
+
+            columns.Insert(position + i, name);
+            if (table.HasHeaderRow)
+                sheet.Values.Set(range.Start.Row, shift.Index + i, CellValue.Text(name));
+        }
+
+        return columns;
+    }
+
+    /// <summary>
+    /// Moves each spill with its anchor. An anchor that was deleted takes the array with it, so
+    /// what remains of its rectangle goes back to blank rather than staying as orphaned values.
+    /// </summary>
+    private static void ShiftSpills(Worksheet sheet, in ReferenceShift shift)
+    {
+        if (sheet.SpillTable.Count == 0)
+            return;
+
+        KeyValuePair<CellRef, RangeRef>[] spills = [.. sheet.SpillTable];
+        sheet.SpillTable.Clear();
+
+        foreach ((CellRef originalAnchor, RangeRef originalRange) in spills)
+        {
+            CellRef anchor = originalAnchor;
+            RangeRef range = originalRange;
+            bool rangeSurvives = shift.TryApply(ref range);
+
+            if (shift.TryApply(ref anchor))
+            {
+                if (rangeSurvives)
+                    sheet.SpillTable[anchor] = range;
+                continue;
+            }
+
+            if (!rangeSurvives)
+                continue;
+
+            for (int row = range.Start.Row; row <= range.End.Row; row++)
+            {
+                for (int column = range.Start.Column; column <= range.End.Column; column++)
+                    sheet.Values.Set(row, column, CellValue.Blank);
+            }
+        }
     }
 
     private static void ShiftAutoFilter(Worksheet sheet, in ReferenceShift shift)

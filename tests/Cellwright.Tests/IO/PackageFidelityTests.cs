@@ -128,6 +128,13 @@ public sealed class PackageFidelityTests
         foreach (string introduced in Validate(saved, cancellationToken).Except(known, StringComparer.Ordinal))
             report.Invalid.Add($"{name}: {introduced}");
 
+        using (Stream source = File.OpenRead(path))
+        {
+            HashSet<string> knownProblems = PackageInvariants.Problems(source);
+            foreach (string introduced in PackageInvariants.Problems(saved).Except(knownProblems, StringComparer.Ordinal))
+                report.Invalid.Add($"{name}: {introduced}");
+        }
+
         saved.Position = 0;
         Workbook reloaded = await Workbook.LoadAsync(saved, new LoadOptions { LeaveOpen = true }, cancellationToken);
         CompareValues(name, book, reloaded, report);

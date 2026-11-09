@@ -44,7 +44,7 @@ await book.SaveAsync("report.xlsx");
 | Package | Adds |
 | --- | --- |
 | `Cellwright` | The core: primitives, streaming, DOM (this package) |
-| `Cellwright.Formulas` | Calculation engine: 447 functions, incremental recalc, dynamic array spill |
+| `Cellwright.Formulas` | Calculation engine: 468 functions, incremental recalc, dynamic array spill |
 | `Cellwright.Mapping` | Typed row mapping via a Roslyn source generator |
 | `Cellwright.Xls` | Legacy `.xls` read/write, `.xlsb` read, encryption, VBA extraction |
 | `Cellwright.Pdf` | Prints workbooks to PDF the way Excel prints them |

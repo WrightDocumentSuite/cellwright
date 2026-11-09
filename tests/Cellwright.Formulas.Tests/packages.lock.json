@@ -162,7 +162,7 @@
       "cellwright.formulas": {
         "type": "Project",
         "dependencies": {
-          "Cellwright": "[0.1.4, )",
+          "Cellwright": "[0.1.5, )",
           "System.Numerics.Tensors": "[10.0.13, )"
         }
       },

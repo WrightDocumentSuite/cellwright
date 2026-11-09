@@ -82,6 +82,14 @@ public sealed class PdfExportOptions
     /// </remarks>
     public Func<Worksheet, CellRef, CellRef, string, CellValue>? RelativeFormulaEvaluator { get; set; }
 
+    /// <summary>
+    /// Decides which compromises stop the render instead of being reported afterwards: when this
+    /// answers <see langword="true"/> for any warning, <see cref="PdfExportRefusedException"/> is
+    /// raised and no document is produced. <see langword="null"/>, the default, accepts them all.
+    /// See <see cref="PdfExportRefusal"/> for ready-made policies.
+    /// </summary>
+    public Func<PdfExportWarning, bool>? RefuseWhen { get; set; }
+
     /// <summary>Whether the structure tree is built, which is what a screen reader follows.</summary>
     public bool Tagged { get; set; }
 

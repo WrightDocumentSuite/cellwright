@@ -106,3 +106,22 @@ ciphertext mutation. Fresh salts and keys make the downstream damage vary: a
 mutation may break ZIP framing or XML inside an otherwise readable ZIP entry.
 The test accepts either parsing failure while still requiring the integrity
 diagnostic; the particular parser exception is not the integrity assertion.
+
+## Holding the formula oracle to a baseline
+
+`ExcelOracleTests` recalculates real workbooks and compares the result with the values Excel cached.
+An agreement percentage alone can hide a regression: it improves if comparable formulas simply
+disappear. On the pinned corpus the test therefore compares its exact result with
+`tests/Cellwright.Formulas.Tests/oracle-baseline.txt`: the file count, skipped files, the total number
+of formulas considered, and every mismatch and unsupported function by file, sheet and cell.
+
+Any difference fails, better or worse, so a new failure cannot hide behind a fix. When a change is
+intended, review the diff and refresh the baseline:
+
+```bash
+CELLWRIGHT_CORPUS_ROOT=/path/to/corpus CELLWRIGHT_TEST_CULTURE=ru-RU CELLWRIGHT_UPDATE_ORACLE_BASELINE=1 \
+  dotnet test tests/Cellwright.Formulas.Tests -c Release --filter "FullyQualifiedName~ExcelOracleTests"
+```
+
+Without `CELLWRIGHT_CORPUS_ROOT` the baseline is not applied, because sibling-repository discovery
+finds whatever happens to be unpacked. The percentage check still applies.

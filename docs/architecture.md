@@ -93,7 +93,7 @@ Number-format classification (date/duration/number) on read uses builtin id and 
 ## Diagnostics instead of silent failure
 
 Load is recovery-oriented: recoverable problems (broken references, unknown cell types, missing
-shared-string indices, lost shared formulas) become `WorkbookWarning` with a code and cell
+shared-string indices, shared formulas whose master cannot be parsed) become `WorkbookWarning` with a code and cell
 address — collected in `Workbook.LoadDiagnostics` and surfaced through `LoadOptions.OnWarning`.
 `XlsxFormatException` is thrown only when the package is structurally broken.
 
@@ -147,8 +147,10 @@ checks it between cells.
 
 - The core does not calculate formulas: it stores and round-trips them as text. Calculation comes
   from `Cellwright.Formulas` (see [formulas.md](formulas.md)).
-- Shared-formula members without the engine attached keep their calculated value but lose formula
-  text and emit a warning; `Calculate()` expands groups into ordinary formulas.
+- Shared formulas load as groups. `Calculate()` expands them into ordinary per-cell formulas, and
+  `Save` does the same with `FormulaText.Translate` when nothing has calculated the workbook, so a
+  save never reduces a member to its cached value. Only cells that declared membership are
+  expanded: a shared `ref` can enclose plain values.
 - Insert/delete rows and columns and sheet rename rewrite formulas as text, not through parsing:
   the core does not depend on the formula package, so `FormulaText` in primitives recognizes
   references in text and rewrites only those, leaving everything else verbatim.

@@ -44,6 +44,7 @@ public static class PdfExporter
             tagger?.Build();
 
             Metadata.Apply(context);
+            EnforceRefusals(options, context.Diagnostics);
             return new PdfExportResult(pdf, context.Diagnostics, pages.Count);
         }
         catch
@@ -51,6 +52,19 @@ public static class PdfExporter
             pdf.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Runs last so that a refusal can name every compromise the render made, not just the first.
+    /// </summary>
+    private static void EnforceRefusals(PdfExportOptions options, PdfExportDiagnostics diagnostics)
+    {
+        if (options.RefuseWhen is not { } refuses)
+            return;
+
+        PdfExportWarning[] refused = [.. diagnostics.Where(refuses)];
+        if (refused.Length > 0)
+            throw new PdfExportRefusedException(refused, diagnostics);
     }
 
     /// <summary>Renders a workbook and writes it to a file.</summary>

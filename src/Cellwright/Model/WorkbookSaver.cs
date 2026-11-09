@@ -23,6 +23,9 @@ internal static class WorkbookSaver
 
         Action<WorkbookWarning> Warn = options.OnWarning ?? (static _ => { });
 
+        foreach (Worksheet sheet in workbook.Sheets)
+            ExpandSharedFormulas(sheet);
+
         XlsxWriter writer = await XlsxWriter.CreateAsync(
             stream, writerOptions, workbook.StylePool, workbook.Preserved, cancellationToken).ConfigureAwait(false);
         await using (writer.ConfigureAwait(false))
@@ -541,6 +544,31 @@ internal static class WorkbookSaver
     }
 
     /// <summary>
+    /// Turns shared groups the engine never expanded into per-cell formulas. A member has no text
+    /// of its own, so writing it as it stands would save only its cached value, and saving a
+    /// workbook must not depend on having been able to calculate it first.
+    /// </summary>
+    private static void ExpandSharedFormulas(Worksheet sheet)
+    {
+        if (sheet.FormulaGroups.Count == 0)
+            return;
+
+        foreach (FormulaGroup group in sheet.FormulaGroups)
+        {
+            if (group.Kind != FormulaGroupKind.Shared)
+                continue;
+
+            foreach (CellRef member in group.Members)
+            {
+                if (sheet.Formulas.Get(member.Row, member.Column) is null)
+                    sheet.Formulas.Set(member.Row, member.Column, FormulaText.Translate(group.Text, group.Master, member));
+            }
+        }
+
+        sheet.FormulaGroups.RemoveAll(static group => group.Kind == FormulaGroupKind.Shared);
+    }
+
+    /// <summary>
     /// Decides what happens to the sheet's tables. Untouched ones keep their original parts,
     /// which carries their filter state and calculated columns across; a change to the table
     /// list means regenerating every part of the sheet from the model.
@@ -555,6 +583,9 @@ internal static class WorkbookSaver
             return (null, null);
         }
 
+        // The regenerated parts replace the originals, which must not stay behind as orphans
+        // still describing the table as it was.
+        ReleaseRelatedParts(writer, sheetPartPath, relationships, static relationship => relationship.Type == XlsxSchema.RelTable);
         relationships.RemoveAll(static r => r.Type == XlsxSchema.RelTable);
         if (sheet.Tables.Count == 0)
             return (null, null);

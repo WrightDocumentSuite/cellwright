@@ -97,6 +97,47 @@ copying it to another reader does not lose legacy settings; when both properties
 last assignment wins. `PackageLimits.None` retains its original meaning and selects
 `DocumentLoadBudget.Unlimited`; prefer a deliberately raised finite `Budget` for server input.
 
-Cellwright currently has no CSV or HTML importer: Markdown is export-only. Consequently there is
-no textual CSV/HTML load path to wire to this budget. When such importers are introduced, they
-must accept this same policy rather than creating format-local size options.
+CSV and TSV input goes through this same budget: set it with `CsvOptions.LoadBudget`.
+`MaxInputBytes` is measured on the bytes of the source stream, so the limit gives the same answer
+for seekable and non-seekable streams and for any encoding. A `TextReader` has no bytes, so its
+characters are counted against the limit instead. Cell text and cell counts use the same budget
+as a workbook.
+
+A quoted field with text after its closing quote is recovered by keeping that text as part of the
+field, which is what Excel does. Set `CsvOptions.StrictQuotes` to raise `InvalidDataException` for
+that and for a quote that is never closed. Use it when the file comes from a producer that should
+have written valid RFC 4180.
+
+Cellwright has no HTML importer: Markdown is export-only. Any future importer must accept this
+same policy rather than creating format-local size options.
+
+## Removing active and linked content
+
+Reading a package, preserving what the model does not understand, and cleaning a file are separate
+operations. A load or a plain save never removes anything. To produce a clean copy, name what to
+leave out and read the report:
+
+```csharp
+using Cellwright.Sanitization;
+
+SanitizeReport report = await workbook.SaveSanitizedAsync(
+    "clean.xlsx",
+    ContentCategories.Macros | ContentCategories.ExternalLinks);
+
+foreach (SanitizedItem item in report.Removed)
+    Console.WriteLine($"removed {item.Kind} {item.Location}");
+```
+
+| Category | Removed |
+| --- | --- |
+| `Macros` | The VBA project and Excel 4.0 macro sheets; the workbook stops declaring itself macro-enabled |
+| `EmbeddedObjects` | OLE objects, embedded packages, ActiveX controls, and the preview pictures only they used |
+| `ExternalLinks` | Links to other workbooks and every external relationship, hyperlinks included |
+| `CustomXml` | Custom XML parts and their properties |
+| `Signatures` | Digital signatures and the parts that list them |
+
+The workbook object is not changed. Parts, relationships, content types and the XML references to
+them are removed together. A formula that reads another workbook loses the formula and keeps its
+last value, a defined name that points at one is removed, and so is a conditional format or
+validation rule that does. A copy without macros is not an `.xlsm` any more and should not keep
+that extension. XML maps in `xl/xmlMaps.xml` are not custom XML parts and are left in place.

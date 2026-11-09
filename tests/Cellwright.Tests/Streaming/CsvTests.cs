@@ -8,6 +8,142 @@ namespace Cellwright.Tests.Streaming;
 /// </summary>
 public sealed class CsvTests
 {
+    private sealed class ForwardOnlyStream(byte[] content) : Stream
+    {
+        private readonly MemoryStream _inner = new(content);
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private static async Task<int> CountRowsAsync(Stream stream, CsvOptions options)
+    {
+        int rows = 0;
+        await foreach (RowData row in CsvReader.ReadRowsAsync(stream, options, TestContext.Current.CancellationToken))
+            rows++;
+        return rows;
+    }
+
+    private static CsvOptions Limited(long bytes) =>
+        new() { LoadBudget = DocumentLoadBudget.Default with { MaxInputBytes = bytes } };
+
+    private static readonly byte[] TwentyByteRussian = Encoding.UTF8.GetBytes(new string('я', 10));
+
+    [Fact]
+    public async Task ByteLimitCountsBytesOnAForwardOnlyStream()
+    {
+        await Assert.ThrowsAsync<DocumentLoadLimitException>(
+            () => CountRowsAsync(new ForwardOnlyStream(TwentyByteRussian), Limited(12)));
+    }
+
+    [Fact]
+    public async Task ByteLimitGivesTheSameAnswerOnSeekableAndForwardOnlyStreams()
+    {
+        await Assert.ThrowsAsync<DocumentLoadLimitException>(
+            () => CountRowsAsync(new MemoryStream(TwentyByteRussian), Limited(12)));
+
+        Assert.Equal(1, await CountRowsAsync(new MemoryStream(TwentyByteRussian), Limited(20)));
+        Assert.Equal(1, await CountRowsAsync(new ForwardOnlyStream(TwentyByteRussian), Limited(20)));
+    }
+
+    [Fact]
+    public async Task ByteLimitSeesTheBytesOfUtf16()
+    {
+        byte[] content = [.. Encoding.Unicode.GetPreamble(), .. Encoding.Unicode.GetBytes("abcdefghij")];
+
+        await Assert.ThrowsAsync<DocumentLoadLimitException>(
+            () => CountRowsAsync(new ForwardOnlyStream(content), Limited(12)));
+        Assert.Equal(1, await CountRowsAsync(new ForwardOnlyStream(content), Limited(22)));
+    }
+
+    [Fact]
+    public async Task ByteLimitCountsFromTheCurrentPositionOfASeekableStream()
+    {
+        byte[] content = [.. new byte[100], .. Encoding.UTF8.GetBytes("abc")];
+        var stream = new MemoryStream(content) { Position = 100 };
+
+        Assert.Equal(1, await CountRowsAsync(stream, Limited(3)));
+    }
+
+    [Fact]
+    public void ACharacterLimitStillAppliesToATextReader()
+    {
+        using var reader = new StringReader("abcdefghij");
+
+        Assert.Throws<DocumentLoadLimitException>(() => CsvReader.ReadRows(reader, Limited(5)).ToList());
+    }
+
+    [Fact]
+    public async Task TheStreamIsLeftOpenWhenAsked()
+    {
+        var stream = new MemoryStream(Encoding.UTF8.GetBytes("a,b"));
+
+        await CountRowsAsync(stream, new CsvOptions { LeaveOpen = true });
+
+        Assert.True(stream.CanRead);
+    }
+
+    [Fact]
+    public void TextAfterAClosingQuoteIsKeptByDefault()
+    {
+        Workbook workbook = Workbook.ParseCsv("\"good\"BAD,next");
+        Worksheet sheet = workbook.Sheets["Sheet1"];
+
+        Assert.Equal("goodBAD", sheet["A1"].GetText());
+        Assert.Equal("next", sheet["B1"].GetText());
+    }
+
+    [Fact]
+    public void StrictQuotesRefuseTextAfterAClosingQuote()
+    {
+        var options = new CsvOptions { StrictQuotes = true };
+
+        Assert.Throws<InvalidDataException>(() => Workbook.ParseCsv("\"good\"BAD,next", options));
+    }
+
+    [Fact]
+    public void StrictQuotesRefuseAnUnclosedQuote()
+    {
+        var options = new CsvOptions { StrictQuotes = true };
+
+        Assert.Throws<InvalidDataException>(() => Workbook.ParseCsv("a,\"never closed", options));
+        Assert.Equal("never closed", Workbook.ParseCsv("a,\"never closed").Sheets["Sheet1"]["B1"].GetText());
+    }
+
+    [Fact]
+    public void StrictQuotesAcceptWellFormedFields()
+    {
+        var options = new CsvOptions { StrictQuotes = true };
+
+        Worksheet sheet = Workbook.ParseCsv("\"a,b\",\"c\"\"d\"\r\n", options).Sheets["Sheet1"];
+
+        Assert.Equal("a,b", sheet["A1"].GetText());
+        Assert.Equal("c\"d", sheet["B1"].GetText());
+    }
+
     [Fact]
     public void ParseCsvAndToCsvRoundTripTypesQuotesAndLeadingZeros()
     {

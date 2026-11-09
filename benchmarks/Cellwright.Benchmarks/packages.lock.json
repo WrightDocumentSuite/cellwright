@@ -317,22 +317,22 @@
       "cellwright.formulas": {
         "type": "Project",
         "dependencies": {
-          "Cellwright": "[0.1.4, )",
+          "Cellwright": "[0.1.5, )",
           "System.Numerics.Tensors": "[10.0.13, )"
         }
       },
       "cellwright.pdf": {
         "type": "Project",
         "dependencies": {
-          "Cellwright": "[0.1.4, )",
-          "Inkwright": "[0.1.4, 0.1.4]"
+          "Cellwright": "[0.1.5, )",
+          "Inkwright": "[0.1.5, 0.1.5]"
         }
       },
       "cellwright.xls": {
         "type": "Project",
         "dependencies": {
-          "Cellwright": "[0.1.4, )",
-          "Cellwright.Formulas": "[0.1.4, )"
+          "Cellwright": "[0.1.5, )",
+          "Cellwright.Formulas": "[0.1.5, )"
         }
       },
       "DocumentFormat.OpenXml": {
@@ -346,9 +346,9 @@
       },
       "Inkwright": {
         "type": "CentralTransitive",
-        "requested": "[0.1.4, 0.1.4]",
-        "resolved": "0.1.4",
-        "contentHash": "9pNuXI5YD1GtC++YuI9EMQG97YI62eUhMfvoJUcmP7rhS7GcrQM/yWQlGRpVQff0DSti8NzVE2R30vCLjVs/BQ==",
+        "requested": "[0.1.5, 0.1.5]",
+        "resolved": "0.1.5",
+        "contentHash": "AH/F04KmtOZW/0gUlsV3dBjqXdv6W48PquY5hcY4dVzOy1OFd+vSe8MQRarVDk3XgYgFjYIilBS7HNKo9BABdA==",
         "dependencies": {
           "System.Security.Cryptography.Pkcs": "10.0.13"
         }

@@ -31,29 +31,85 @@ public sealed class PictureAnchor
     /// <summary>Which of the three ways the picture is pinned.</summary>
     public required PictureAnchorKind Kind { get; init; }
 
+    private CellRef _from;
+    private (long X, long Y) _fromOffset;
+    private CellRef _to;
+    private (long X, long Y) _toOffset;
+    private (long Width, long Height) _extent;
+    private (long X, long Y) _position;
+    private PictureMoveBehavior _moveBehavior = PictureMoveBehavior.MoveAndResize;
+
+    /// <summary>The collection told about edits, so a loaded picture is not saved where it was read.</summary>
+    internal PictureCollection? Owner { get; set; }
+
+    private void Assign<T>(ref T field, T value)
+        where T : IEquatable<T>
+    {
+        if (field.Equals(value))
+            return;
+
+        field = value;
+        Owner?.MarkModified();
+    }
+
     /// <summary>Cell holding the top-left corner. Unused by <see cref="PictureAnchorKind.Absolute"/>.</summary>
-    public CellRef From { get; set; }
+    public CellRef From
+    {
+        get => _from;
+        set => Assign(ref _from, value);
+    }
 
     /// <summary>Offset into <see cref="From"/>, in EMU, right and down from its top-left corner.</summary>
-    public (long X, long Y) FromOffset { get; set; }
+    public (long X, long Y) FromOffset
+    {
+        get => _fromOffset;
+        set => Assign(ref _fromOffset, value);
+    }
 
     /// <summary>Cell holding the bottom-right corner. Only for <see cref="PictureAnchorKind.TwoCell"/>.</summary>
-    public CellRef To { get; set; }
+    public CellRef To
+    {
+        get => _to;
+        set => Assign(ref _to, value);
+    }
 
     /// <summary>Offset into <see cref="To"/>, in EMU.</summary>
-    public (long X, long Y) ToOffset { get; set; }
+    public (long X, long Y) ToOffset
+    {
+        get => _toOffset;
+        set => Assign(ref _toOffset, value);
+    }
 
     /// <summary>
     /// Size in EMU, for the two kinds that carry one. A two-cell anchor has no size of its own:
     /// its size is whatever the cells between its corners come to.
     /// </summary>
-    public (long Width, long Height) Extent { get; set; }
+    public (long Width, long Height) Extent
+    {
+        get => _extent;
+        set => Assign(ref _extent, value);
+    }
 
     /// <summary>Position in EMU from the top-left of the sheet, for an absolute anchor.</summary>
-    public (long X, long Y) Position { get; set; }
+    public (long X, long Y) Position
+    {
+        get => _position;
+        set => Assign(ref _position, value);
+    }
 
     /// <summary>What happens to the picture when the cells under it move or resize.</summary>
-    public PictureMoveBehavior MoveBehavior { get; set; } = PictureMoveBehavior.MoveAndResize;
+    public PictureMoveBehavior MoveBehavior
+    {
+        get => _moveBehavior;
+        set
+        {
+            if (_moveBehavior == value)
+                return;
+
+            _moveBehavior = value;
+            Owner?.MarkModified();
+        }
+    }
 
     /// <summary>Pins a picture between two cells, so it moves and resizes with them.</summary>
     public static PictureAnchor Between(CellRef from, CellRef to) =>
@@ -173,6 +229,7 @@ public sealed class PictureCollection : IReadOnlyList<Picture>
         if (picture.Content.IsEmpty)
             throw new ArgumentException("A picture has no content.", nameof(picture));
 
+        picture.Anchor.Owner = this;
         _pictures.Add(picture);
         IsModified = true;
         return picture;
@@ -199,6 +256,9 @@ public sealed class PictureCollection : IReadOnlyList<Picture>
     public bool Remove(Picture picture)
     {
         bool removed = _pictures.Remove(picture);
+        if (removed)
+            picture.Anchor.Owner = null;
+
         IsModified |= removed;
         return removed;
     }
@@ -209,12 +269,19 @@ public sealed class PictureCollection : IReadOnlyList<Picture>
         if (_pictures.Count == 0)
             return;
 
+        foreach (Picture picture in _pictures)
+            picture.Anchor.Owner = null;
+
         _pictures.Clear();
         IsModified = true;
     }
 
     /// <summary>Adds a picture read from a file without marking the collection as edited.</summary>
-    internal void AddFromFile(Picture picture) => _pictures.Add(picture);
+    internal void AddFromFile(Picture picture)
+    {
+        picture.Anchor.Owner = this;
+        _pictures.Add(picture);
+    }
 
     /// <summary>Marks the collection as owned by the model, e.g. after a structural edit moved a picture.</summary>
     internal void MarkModified() => IsModified = true;

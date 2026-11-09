@@ -34,7 +34,7 @@ public sealed class SheetCollection : IReadOnlyList<Worksheet>
 
         var sheet = new Worksheet(_workbook, name, _workbook.NextSheetId++);
         _sheets.Add(sheet);
-        _workbook.IsFullyCalculated = false;
+        _workbook.NotifyStructureChanged();
         return sheet;
     }
 
@@ -46,7 +46,7 @@ public sealed class SheetCollection : IReadOnlyList<Worksheet>
 
         // Formulas reference sheets by identity, so removal turns them into #REF! on the next
         // calculation rather than silently binding to whatever sheet took the same name.
-        _workbook.IsFullyCalculated = false;
+        _workbook.NotifyStructureChanged();
         return true;
     }
 
@@ -69,6 +69,7 @@ public sealed class SheetCollection : IReadOnlyList<Worksheet>
 
         _sheets.RemoveAt(from);
         _sheets.Insert(index, sheet);
+        _workbook.NotifyStructureChanged();
     }
 
     /// <summary>Moves a sheet found by name.</summary>

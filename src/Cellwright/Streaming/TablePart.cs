@@ -92,6 +92,13 @@ internal static class TablePart
     /// <summary>Writes a table part.</summary>
     public static void Write(Utf8XmlWriter xml, ExcelTable table)
     {
+        // Excel repairs a table whose ref and tableColumns disagree, dropping the table.
+        if (table.Columns.Count != table.Range.ColumnCount)
+        {
+            throw new InvalidOperationException(
+                $"Table '{table.Name}' declares {table.Columns.Count} column(s) over a range {table.Range.ColumnCount} wide.");
+        }
+
         xml.WriteDeclaration();
         xml.WriteRaw("<table xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" id=\""u8);
         xml.WriteInt32(table.Id);

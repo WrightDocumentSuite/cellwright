@@ -4,11 +4,11 @@
     "net10.0": {
       "Inkwright.Layout": {
         "type": "Direct",
-        "requested": "[0.1.4, 0.1.4]",
-        "resolved": "0.1.4",
-        "contentHash": "JKHn5o/9w20eSa62flAmx7cqxwu+wwal8S4mPTOgINNFg+Y0DlR8D6CHvmVKB4q0lGYKhggiE+dcrXeeK+gyzw==",
+        "requested": "[0.1.5, 0.1.5]",
+        "resolved": "0.1.5",
+        "contentHash": "0XIAIDlFz+fpkI86Q5+t2AgokNZF0b50KhBHfJ4JxZfs7z0LjkRHPMKoauSCmeXh0lwqpppskYRA8bR5gT7ZaA==",
         "dependencies": {
-          "Inkwright": "0.1.4"
+          "Inkwright": "0.1.5"
         }
       },
       "Microsoft.NET.Test.Sdk": {
@@ -131,15 +131,15 @@
       "cellwright.pdf": {
         "type": "Project",
         "dependencies": {
-          "Cellwright": "[0.1.4, )",
-          "Inkwright": "[0.1.4, 0.1.4]"
+          "Cellwright": "[0.1.5, )",
+          "Inkwright": "[0.1.5, 0.1.5]"
         }
       },
       "Inkwright": {
         "type": "CentralTransitive",
-        "requested": "[0.1.4, 0.1.4]",
-        "resolved": "0.1.4",
-        "contentHash": "9pNuXI5YD1GtC++YuI9EMQG97YI62eUhMfvoJUcmP7rhS7GcrQM/yWQlGRpVQff0DSti8NzVE2R30vCLjVs/BQ==",
+        "requested": "[0.1.5, 0.1.5]",
+        "resolved": "0.1.5",
+        "contentHash": "AH/F04KmtOZW/0gUlsV3dBjqXdv6W48PquY5hcY4dVzOy1OFd+vSe8MQRarVDk3XgYgFjYIilBS7HNKo9BABdA==",
         "dependencies": {
           "System.Security.Cryptography.Pkcs": "10.0.13"
         }

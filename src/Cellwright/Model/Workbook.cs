@@ -95,6 +95,20 @@ public sealed class Workbook
     internal Action<Worksheet>? VisibilityChanged { get; set; }
 
     /// <summary>
+    /// Raised when sheets are added, removed, reordered or renamed. Formulas bind sheet names when
+    /// they are compiled and 3-D references depend on tab order, so what was compiled before no
+    /// longer says what the formula means.
+    /// </summary>
+    internal Action? StructureChanged { get; set; }
+
+    /// <summary>Tells the engine its compiled formulas and graph describe a layout that is gone.</summary>
+    internal void NotifyStructureChanged()
+    {
+        IsFullyCalculated = false;
+        StructureChanged?.Invoke();
+    }
+
+    /// <summary>
     /// Whether every formula holds an up-to-date computed value. Set by the calculation
     /// engine, cleared by any model mutation; controls the <c>fullCalcOnLoad</c> flag on save.
     /// </summary>
@@ -133,6 +147,7 @@ public sealed class Workbook
             name.RefersTo = FormulaText.RenameSheet(name.RefersTo, oldName, newName) ?? name.RefersTo;
 
         Preserved?.RetargetSheetName(oldName, newName);
+        NotifyStructureChanged();
     }
 
     /// <summary>

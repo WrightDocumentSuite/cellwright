@@ -210,7 +210,11 @@ internal sealed class WorksheetContentSink(
     {
         // A master declares the extent of its group, but some producers omit or understate the
         // ref attribute, so members outside it widen the range.
-        if (_sharedGroups.TryGetValue(sharedIndex, out FormulaGroup? group) && !group.Range.Contains(cell))
+        if (!_sharedGroups.TryGetValue(sharedIndex, out FormulaGroup? group))
+            return;
+
+        group.Members.Add(cell);
+        if (!group.Range.Contains(cell))
             group.Range = new RangeRef(group.Range.Start, cell);
     }
 

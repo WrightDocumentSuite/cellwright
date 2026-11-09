@@ -127,6 +127,17 @@ is closed. The foreign file itself is never opened. The cache is also available 
 - A circular reference does not throw: cycle participants get 0, addresses land in
   `CalculationSummary.CircularCells`, and an `OnWarning` `CircularReference` arrives for each
   cell.
+- A range containing the formula's own cell is circular, as a direct reference is: `SUM(A1:A2)` in
+  A1 reports a cycle. A formula using a function that only inspects an address (`ROW`, `COLUMN`,
+  `ROWS`, `COLUMNS`, `AREAS`, `ISREF`, `ISFORMULA`, `FORMULATEXT`, `INDEX`, `OFFSET`, `CELL`,
+  `SHEET`, `SHEETS`) can name its own cell without being treated as circular. The check is per
+  formula, so `ROW(A1)+A1` in A1 goes unreported.
+- Defined names are part of the formulas that use them: their references take part in ordering
+  and recalculation, and a name using a volatile function makes its users volatile. Adding,
+  removing or redirecting a name recalculates the workbook. Adding, removing, moving or renaming
+  a sheet recompiles formulas, so a reference to a sheet added later starts working.
+- A cancelled or failed `Calculate` leaves the workbook marked as not calculated. The next call
+  repeats the work, and a save in that state asks Excel to recalculate on load.
 - An unparseable formula yields `#NAME?` and a `BadFormula` warning; a reference to a
   nonexistent sheet yields `#REF!`.
 - Volatile functions (`NOW`, `TODAY`, `RAND`, `RANDBETWEEN`, `OFFSET`, `INDIRECT`) recalculate
@@ -351,7 +362,9 @@ Three things worth knowing if the engine is used on large workbooks:
   `#SPILL!` on the next recalculation — as in Excel. On save the anchor goes out as an array formula
   with `ref` and a `cm` index in metadata (`XLDAPR`), so Excel opens it as dynamic, and reload does
   not turn it into a CSE relic. Limits: rectangles are known only after evaluation, so formulas
-  reading a spill may need an extra pass — the engine runs up to three per `Calculate` call; a bare
+  reading a spill may need an extra pass — the engine repeats over the readers of whatever changed
+  until nothing does, up to 32 rounds per `Calculate` call, and warns with `SpillDidNotSettle` if
+  arrays still have not settled; a bare
   range reference (`=A1:A3`) still collapses by implicit intersection, not spill; in a workbook that
   arrived with its own metadata part, a new spill is written as a legacy array with a
   `DynamicArrayAsLegacy` warning — the writer does not renumber someone else's part.

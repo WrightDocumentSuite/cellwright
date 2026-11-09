@@ -8,8 +8,28 @@ namespace Cellwright;
 /// </summary>
 public sealed class CellComment
 {
+    private CellRef _cell;
+
+    /// <summary>The collection told when the note moves, because it finds notes by their cell.</summary>
+    internal CommentCollection? Owner { get; set; }
+
     /// <summary>Cell the note is anchored to.</summary>
-    public required CellRef Cell { get; set; }
+    public required CellRef Cell
+    {
+        get => _cell;
+        set
+        {
+            if (_cell == value)
+                return;
+
+            CellRef previous = _cell;
+            _cell = value;
+            Owner?.NoteMoved(this, previous);
+        }
+    }
+
+    /// <summary>Changes the cell while the collection itself is being rebuilt.</summary>
+    internal void Relocate(CellRef cell) => _cell = cell;
 
     /// <summary>Text of the note.</summary>
     public required string Text { get; init; }
@@ -52,7 +72,7 @@ public sealed class CommentCollection : IReadOnlyCollection<CellComment>
     public CellComment Add(CellRef cell, string text, string? author = null)
     {
         ArgumentNullException.ThrowIfNull(text);
-        var comment = new CellComment { Cell = cell, Text = text, Author = author };
+        var comment = new CellComment { Cell = cell, Text = text, Author = author, Owner = this };
         _comments[cell] = comment;
         IsModified = true;
         return comment;
@@ -65,13 +85,30 @@ public sealed class CommentCollection : IReadOnlyCollection<CellComment>
     /// <summary>Removes the note on a cell. Returns whether one was there.</summary>
     public bool Remove(CellRef cell)
     {
-        bool removed = _comments.Remove(cell);
+        bool removed = _comments.Remove(cell, out CellComment? comment);
+        if (comment is not null)
+            comment.Owner = null;
+
         IsModified |= removed;
         return removed;
     }
 
     /// <summary>Adds a note read from a file without marking the collection as edited.</summary>
-    internal void AddFromFile(CellComment comment) => _comments[comment.Cell] = comment;
+    internal void AddFromFile(CellComment comment)
+    {
+        comment.Owner = this;
+        _comments[comment.Cell] = comment;
+    }
+
+    /// <summary>Files a note under its new cell, displacing whatever note was there.</summary>
+    internal void NoteMoved(CellComment comment, CellRef previous)
+    {
+        if (_comments.TryGetValue(previous, out CellComment? held) && ReferenceEquals(held, comment))
+            _comments.Remove(previous);
+
+        _comments[comment.Cell] = comment;
+        IsModified = true;
+    }
 
     /// <summary>Marks a loaded comments part for regeneration after placeholder reconciliation.</summary>
     internal void MarkModified() => IsModified = true;
@@ -91,7 +128,7 @@ public sealed class CommentCollection : IReadOnlyCollection<CellComment>
             if (map(comment.Cell) is not { } cell)
                 continue;
 
-            comment.Cell = cell;
+            comment.Relocate(cell);
             moved[cell] = comment;
         }
 

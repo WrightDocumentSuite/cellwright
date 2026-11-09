@@ -29,6 +29,8 @@ internal sealed class CalculationEngine
         _context = new EvalContext(workbook, static (sheet, row, column) => sheet.Values.Get(row, column));
         workbook.CellChanged += OnCellChanged;
         workbook.VisibilityChanged += OnVisibilityChanged;
+        workbook.StructureChanged += OnStructureChanged;
+        workbook.Names.Changed += OnNamesChanged;
     }
 
     /// <summary>Materialized ranges retained between passes; inspected by tests and benchmarks.</summary>
@@ -41,6 +43,10 @@ internal sealed class CalculationEngine
     public CalculationSummary Calculate(CalculateOptions options)
     {
         long start = Stopwatch.GetTimestamp();
+
+        // Stays false unless the pass finishes, so a cancelled or failed one is not mistaken for
+        // a complete result by CalculatedValue or by fullCalcOnLoad on save.
+        _workbook.IsFullyCalculated = false;
         _context.BeginPass();
         _context.CancellationToken = options.CancellationToken;
         _context.OnWarning = options.OnWarning;
@@ -55,8 +61,8 @@ internal sealed class CalculationEngine
 
         // A spill writes cells no edge of the graph predicted — the rectangle exists only once
         // the formula has run — so anything reading those cells may have gone before them. The
-        // pass is repeated over just the readers of what changed, and the bound is small
-        // because each round can only be caused by a spill that moved in the round before.
+        // pass is repeated over just the readers of what changed. A round is only caused by a
+        // spill that changed in the round before, and the bound stops arrays that feed themselves.
         for (int pass = 0; pass < MaxSpillPasses && targets.Length > 0; pass++)
         {
             _spilledCells.Clear();
@@ -71,9 +77,20 @@ internal sealed class CalculationEngine
             targets = SpillReaders();
         }
 
+        // Only now has the work been done: until this point a retry must redo all of it.
+        _firstPass = false;
         _dirty.Clear();
         ReportCircular(options.OnWarning);
-        _workbook.IsFullyCalculated = _circular.Count == 0;
+
+        bool settled = targets.Length == 0;
+        if (!settled)
+        {
+            options.OnWarning?.Invoke(new WorkbookWarning(
+                "SpillDidNotSettle",
+                $"Dynamic arrays were still changing after {MaxSpillPasses} rounds; some formulas may hold outdated values."));
+        }
+
+        _workbook.IsFullyCalculated = _circular.Count == 0 && settled;
 
         return new CalculationSummary(calculated, errors, DescribeCircular(), Stopwatch.GetElapsedTime(start));
     }
@@ -127,7 +144,7 @@ internal sealed class CalculationEngine
     }
 
     /// <summary>How many rounds a pass may repeat over the readers of moved spills.</summary>
-    private const int MaxSpillPasses = 3;
+    private const int MaxSpillPasses = 32;
 
     /// <summary>The cells every spill of this pass wrote or vacated, for the follow-up round.</summary>
     private readonly List<(Worksheet Sheet, RangeRef Range)> _spilledCells = [];
@@ -198,6 +215,9 @@ internal sealed class CalculationEngine
         if (previous is { } old)
             VacateOutside(sheet, old, target);
 
+        // No edge of the graph leads from the anchor to a reader of one of its spilled cells, so
+        // new values in an unchanged rectangle need the follow-up round as much as a moved one.
+        bool changed = previous != target;
         for (int row = 0; row < array.Rows; row++)
         {
             for (int column = 0; column < array.Columns; column++)
@@ -206,16 +226,17 @@ internal sealed class CalculationEngine
                 if (value.IsBlank)
                     value = CellValue.Number(0);
 
+                changed |= sheet.Values.Get(anchor.Row + row, anchor.Column + column) != value;
                 sheet.Values.Set(anchor.Row + row, anchor.Column + column, value);
                 _context.Ranges.Invalidate(sheet, anchor.Row + row, anchor.Column + column);
             }
         }
 
         sheet.SpillTable[anchor] = target;
-        if (previous != target)
+        if (changed)
         {
             _spilledCells.Add((sheet, target));
-            if (previous is { } vacated)
+            if (previous is { } vacated && vacated != target)
                 _spilledCells.Add((sheet, vacated));
         }
 
@@ -333,10 +354,7 @@ internal sealed class CalculationEngine
     private int[] SelectTargetsInOrder(bool force)
     {
         if (force || _firstPass)
-        {
-            _firstPass = false;
             return _order;
-        }
 
         var targets = new HashSet<int>(_dirty);
         foreach (int entry in _index!.VolatileEntries)
@@ -359,13 +377,35 @@ internal sealed class CalculationEngine
         _index = new DependencyIndex();
         _context.Ranges.Clear();
         foreach (Worksheet sheet in _workbook.Sheets)
+        {
+            RetractOrphanedSpills(sheet);
             AddSheetFormulas(sheet);
+        }
 
         _index.Connect(_context);
         (_order, _circular) = CalculationOrder.Build(_index.Entries);
         _index.SetOrder(_order);
         _structureChanged = false;
         _firstPass = true;
+    }
+
+    /// <summary>
+    /// A spill belongs to the formula at its anchor. When that formula has been replaced by a
+    /// value or cleared, nothing will ever recalculate the rectangle, so it is taken back here.
+    /// </summary>
+    private void RetractOrphanedSpills(Worksheet sheet)
+    {
+        if (sheet.SpillTable.Count == 0)
+            return;
+
+        foreach ((CellRef anchor, RangeRef range) in sheet.SpillTable.ToArray())
+        {
+            if (sheet.Formulas.Get(anchor.Row, anchor.Column) is not null)
+                continue;
+
+            sheet.SpillTable.Remove(anchor);
+            VacateOutside(sheet, range, new RangeRef(anchor, anchor));
+        }
     }
 
     private void AddSheetFormulas(Worksheet sheet)
@@ -428,6 +468,20 @@ internal sealed class CalculationEngine
 
         foreach (int entry in _index.VisibilityDependentEntries)
             _dirty.Add(entry);
+    }
+
+    /// <summary>Sheet references are bound when a formula compiles, so the compiled forms go too.</summary>
+    private void OnStructureChanged()
+    {
+        _programs.Clear();
+        _context.ClearPrograms();
+        _structureChanged = true;
+    }
+
+    private void OnNamesChanged()
+    {
+        _workbook.IsFullyCalculated = false;
+        _structureChanged = true;
     }
 
     private void ReportCircular(Action<WorkbookWarning>? onWarning)

@@ -49,7 +49,9 @@ internal static class WorksheetCopier
             string text = options.RetargetSelfReferences
                 ? FormulaText.RenameSheet(group.Text, source.Name, target.Name)!
                 : group.Text;
-            target.FormulaGroups.Add(new FormulaGroup(group.Kind, group.Master, group.Range, text));
+            var copy = new FormulaGroup(group.Kind, group.Master, group.Range, text);
+            copy.Members.AddRange(group.Members);
+            target.FormulaGroups.Add(copy);
         }
 
         foreach ((CellRef cell, FormulaMarkup markup) in source.FormulaMarkupTable)

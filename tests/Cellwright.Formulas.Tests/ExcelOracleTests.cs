@@ -40,6 +40,8 @@ public sealed class ExcelOracleTests
         Assert.True(
             report.Agreement >= RequiredAgreement,
             $"Agreement with Excel dropped to {report.Agreement:P1} (was required to stay at or above {RequiredAgreement:P0}).\n{report}");
+
+        OracleBaseline.Enforce(report.ToBaselineLines());
     }
 
     private static async Task CompareFileAsync(string path, OracleReport report, CancellationToken cancellationToken)
@@ -68,10 +70,14 @@ public sealed class ExcelOracleTests
                 if (formula is null || !expected.TryGetValue((sheetIndex, row, column), out CellValue cached))
                     continue;
 
-                report.Compare(cached, sheet[row, column], formula);
+                report.Compare(cached, sheet[row, column], formula, Location(path, sheet, row, column));
             }
         }
     }
+
+    /// <summary>Where a formula is, in a form that does not depend on where the corpus was unpacked.</summary>
+    private static string Location(string path, Worksheet sheet, int row, int column) =>
+        $"{OracleCorpus.RelativeName(path)}|{sheet.Name}|{new CellRef(row, column)}";
 
     /// <summary>Snapshots the values that were in the file before the engine overwrote them.</summary>
     private static void CaptureCachedValues(Workbook book, Dictionary<(int, int, int), CellValue> destination)
@@ -94,6 +100,11 @@ public sealed class ExcelOracleTests
         private readonly Dictionary<string, int> _unsupportedByFunction = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<string> _samples = [];
         private readonly HashSet<string> _sampled = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<string> _mismatchLocations = [];
+        private readonly List<string> _unsupportedLocations = [];
+
+        /// <summary>Formulas whose cached value cannot be compared: volatile ones and cached blanks.</summary>
+        public int Uncomparable { get; private set; }
 
         public int Files { get; set; }
 
@@ -137,7 +148,7 @@ public sealed class ExcelOracleTests
             return false;
         }
 
-        public void Compare(in CellValue expected, in CellValue actual, string formula)
+        public void Compare(in CellValue expected, in CellValue actual, string formula, string location)
         {
             // Features documented as out of scope for v1 would otherwise drown out the signal
             // this report exists for: how well the supported surface matches Excel.
@@ -152,7 +163,7 @@ public sealed class ExcelOracleTests
             if (actual.IsError && actual.GetError() == ExcelError.Name && !expected.IsError)
             {
                 Unsupported++;
-                Record(_unsupportedByFunction, formula);
+                _unsupportedLocations.Add($"{location}|{Record(_unsupportedByFunction, formula)}");
                 return;
             }
 
@@ -161,6 +172,7 @@ public sealed class ExcelOracleTests
                 formula.Contains("TODAY(", StringComparison.OrdinalIgnoreCase) ||
                 formula.Contains("RAND", StringComparison.OrdinalIgnoreCase))
             {
+                Uncomparable++;
                 return;
             }
 
@@ -172,6 +184,7 @@ public sealed class ExcelOracleTests
             }
 
             string name = Record(_mismatchesByFunction, formula);
+            _mismatchLocations.Add($"{location}|{name}");
 
             // One example per offending function rather than the first fifteen overall: a single
             // noisy function would otherwise hide every other kind of disagreement.
@@ -240,6 +253,29 @@ public sealed class ExcelOracleTests
             return formula.Contains('[') ? "(structured references)" : "(operators)";
         }
 
+        /// <summary>
+        /// The result as lines that diff well. Every figure a regression could hide behind is
+        /// here: the agreement percentage alone improves if comparable formulas simply vanish,
+        /// and a count per function would let one new failure cancel out one fix.
+        /// </summary>
+        public IEnumerable<string> ToBaselineLines()
+        {
+            yield return $"files {Files}";
+            yield return $"skipped-files {SkippedFiles}";
+            yield return $"denominator {Compared + Unsupported + OutOfScope + Uncomparable}";
+            yield return $"compared {Compared}";
+            yield return $"matched {Matched}";
+            yield return $"unsupported {Unsupported}";
+            yield return $"out-of-scope {OutOfScope}";
+            yield return $"uncomparable {Uncomparable}";
+
+            foreach (string location in _mismatchLocations.Order(StringComparer.Ordinal))
+                yield return $"mismatch {location}";
+
+            foreach (string location in _unsupportedLocations.Order(StringComparer.Ordinal))
+                yield return $"unsupported-function {location}";
+        }
+
         public IEnumerable<string> TopMismatches(int count) =>
             Top(_mismatchesByFunction, count, "wrong value")
                 .Concat(Top(_unsupportedByFunction, count, "unsupported"));
@@ -276,6 +312,10 @@ internal static class OracleCorpus
     /// <summary>Returns up to <paramref name="max"/> sample workbooks, or an empty list.</summary>
     public static IReadOnlyList<string> Files(int max) => AllFiles.Value.Take(max).ToArray();
 
+    /// <summary>A file's path below the corpus root, with forward slashes.</summary>
+    public static string RelativeName(string path) =>
+        Path.GetRelativePath(FindCorpusRoot()!, path).Replace('\\', '/');
+
     private static string[] Discover()
     {
         string? root = FindCorpusRoot();
@@ -292,5 +332,57 @@ internal static class OracleCorpus
     private static string? FindCorpusRoot()
     {
         return CorpusRoot.Find("ClosedXML-0.105.0");
+    }
+}
+
+/// <summary>
+/// Holds the oracle to exact, reviewable results on the pinned corpus. Any change, better or
+/// worse, has to be accepted by rewriting the baseline, so a new failure cannot hide behind a
+/// fix and a shrinking denominator cannot pass unnoticed.
+/// </summary>
+internal static class OracleBaseline
+{
+    private const string UpdateVariable = "CELLWRIGHT_UPDATE_ORACLE_BASELINE";
+    private const int MaxReportedDifferences = 40;
+
+    public static void Enforce(IEnumerable<string> results)
+    {
+        // Sibling-repository discovery finds whatever happens to be unpacked, so only the
+        // explicitly configured corpus has known contents to hold the result against.
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CELLWRIGHT_CORPUS_ROOT")))
+            return;
+
+        string path = BaselinePath();
+        string[] actual = [.. results];
+        if (Environment.GetEnvironmentVariable(UpdateVariable) == "1")
+        {
+            File.WriteAllLines(path, actual);
+            return;
+        }
+
+        string[] expected = File.ReadAllLines(path);
+        string[] removed = [.. expected.Except(actual, StringComparer.Ordinal)];
+        string[] added = [.. actual.Except(expected, StringComparer.Ordinal)];
+        if (removed.Length == 0 && added.Length == 0)
+            return;
+
+        IEnumerable<string> differences = added.Select(static line => "+ " + line)
+            .Concat(removed.Select(static line => "- " + line))
+            .Take(MaxReportedDifferences);
+        Assert.Fail(
+            $"The oracle result differs from {Path.GetFileName(path)} ({added.Length} new line(s), {removed.Length} gone).\n" +
+            string.Join("\n", differences) +
+            $"\nIf the change is intended, review it and rerun with {UpdateVariable}=1 to accept it.");
+    }
+
+    private static string BaselinePath()
+    {
+        for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Cellwright.slnx")))
+                return Path.Combine(directory.FullName, "tests", "Cellwright.Formulas.Tests", "oracle-baseline.txt");
+        }
+
+        throw new DirectoryNotFoundException("The tests are not running from inside the repository.");
     }
 }

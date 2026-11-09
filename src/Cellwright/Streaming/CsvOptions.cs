@@ -60,6 +60,14 @@ public sealed record CsvOptions
     /// <summary>Whether to leave the underlying stream open after reading or writing. Defaults to <see langword="false"/>.</summary>
     public bool LeaveOpen { get; init; }
 
+    /// <summary>
+    /// Whether a malformed quoted field is an error: text after a field's closing quote, or a
+    /// quote that is never closed. When <see langword="false"/>, the default, such a field is
+    /// recovered the way Excel recovers it, by keeping the text after the closing quote as part
+    /// of the field. When <see langword="true"/>, reading raises <see cref="InvalidDataException"/>.
+    /// </summary>
+    public bool StrictQuotes { get; init; }
+
     /// <summary>Resource limits enforced when reading CSV/TSV inputs. Defaults to <see cref="DocumentLoadBudget.Default"/>.</summary>
     public DocumentLoadBudget LoadBudget { get; init; } = DocumentLoadBudget.Default;
 

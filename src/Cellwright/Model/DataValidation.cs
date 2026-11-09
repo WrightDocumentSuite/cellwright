@@ -77,8 +77,23 @@ public enum DataValidationErrorStyle
 /// </summary>
 public sealed class DataValidation
 {
+    private IReadOnlyList<RangeRef> _ranges = [];
+    private string? _formula1;
+    private string? _formula2;
+
+    /// <summary>The collection told about edits, so a loaded rule is not saved as it was read.</summary>
+    internal DataValidationCollection? Owner { get; set; }
+
     /// <summary>Ranges the rule applies to. At least one is required.</summary>
-    public required IReadOnlyList<RangeRef> Ranges { get; set; }
+    public required IReadOnlyList<RangeRef> Ranges
+    {
+        get => _ranges;
+        set
+        {
+            _ranges = value;
+            Owner?.MarkModified();
+        }
+    }
 
     /// <summary>Kind of input accepted.</summary>
     public DataValidationType Type { get; init; }
@@ -87,10 +102,32 @@ public sealed class DataValidation
     public DataValidationOperator Operator { get; init; }
 
     /// <summary>First bound, list source or custom condition, without the leading <c>=</c>.</summary>
-    public string? Formula1 { get; set; }
+    public string? Formula1
+    {
+        get => _formula1;
+        set
+        {
+            if (_formula1 == value)
+                return;
+
+            _formula1 = value;
+            Owner?.MarkModified();
+        }
+    }
 
     /// <summary>Second bound for the between operators.</summary>
-    public string? Formula2 { get; set; }
+    public string? Formula2
+    {
+        get => _formula2;
+        set
+        {
+            if (_formula2 == value)
+                return;
+
+            _formula2 = value;
+            Owner?.MarkModified();
+        }
+    }
 
     /// <summary>Whether an empty cell passes.</summary>
     public bool AllowBlank { get; init; } = true;
@@ -155,6 +192,7 @@ public sealed class DataValidation
     internal DataValidation Clone()
     {
         var copy = (DataValidation)MemberwiseClone();
+        copy.Owner = null;
         copy.Ranges = [.. Ranges];
         return copy;
     }
@@ -201,6 +239,7 @@ public sealed class DataValidationCollection : IReadOnlyList<DataValidation>
         if (validation.Ranges.Count == 0)
             throw new ArgumentException("A data validation must cover at least one range.", nameof(validation));
 
+        validation.Owner = this;
         _validations.Add(validation);
         IsModified = true;
         return validation;
@@ -210,6 +249,9 @@ public sealed class DataValidationCollection : IReadOnlyList<DataValidation>
     public bool Remove(DataValidation validation)
     {
         bool removed = _validations.Remove(validation);
+        if (removed)
+            validation.Owner = null;
+
         IsModified |= removed;
         return removed;
     }
@@ -219,12 +261,20 @@ public sealed class DataValidationCollection : IReadOnlyList<DataValidation>
     {
         if (_validations.Count == 0)
             return;
+
+        foreach (DataValidation validation in _validations)
+            validation.Owner = null;
+
         _validations.Clear();
         IsModified = true;
     }
 
     /// <summary>Adds a rule read from a file without marking the collection as edited.</summary>
-    internal void AddFromFile(DataValidation validation) => _validations.Add(validation);
+    internal void AddFromFile(DataValidation validation)
+    {
+        validation.Owner = this;
+        _validations.Add(validation);
+    }
 
     /// <summary>Marks the collection as owned by the model, e.g. after a structural edit moved a rule.</summary>
     internal void MarkModified() => IsModified = true;

@@ -8,6 +8,45 @@ is not frozen yet.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-09
+
+### Added
+
+- `PdfExportOptions.RefuseWhen` stops a render with `PdfExportRefusedException` on the compromises
+  it selects, using the existing diagnostics. `PdfExportRefusal` has ready-made policies.
+- `SaveSanitizedAsync` writes a copy without the chosen `ContentCategories` (macros, embedded
+  objects, external links, custom XML, signatures) and reports what was removed and what was kept.
+
+### Fixed
+
+- Defined names are dependencies: formulas recalculate when a name's source changes, in the right
+  order on the first pass, and when a name is added, removed or redirected. Names follow other
+  names, honour sheet scope, and make their users volatile when they use a volatile function.
+- Readers of spilled cells recalculate when the array's values change inside the same rectangle.
+  Replacing or clearing an anchor takes its spill back, and row and column edits move spills with
+  their anchors.
+- Adding, removing, moving or renaming a sheet recompiles the formulas that refer to sheets, so
+  `#REF!` results, 3-D spans and references to a newly added sheet are up to date.
+- A cancelled or failed `Calculate` no longer reports the workbook as calculated or skips the
+  retry. `fullCalcOnLoad` is written for a workbook left in that state.
+- A range containing the formula itself is reported as a circular reference, as with `A1:A2` in
+  A1. Functions that only inspect an address, such as `ROW(A1)` in A1, are not treated as circular.
+- Edits to a loaded table's `Range`, a validation's `Ranges` and formulas, a picture's anchor and a
+  note's `Cell` are saved. They were previously lost because the original XML was written back.
+- Saving a loaded workbook without calculating it keeps shared formulas: members are written as
+  ordinary formulas instead of being reduced to their cached values.
+- Expanding a shared formula no longer turns a plain value inside the group's range into a formula.
+- CSV `MaxInputBytes` is measured in bytes of the source stream, so non-seekable streams and
+  multi-byte encodings no longer get a looser limit than seekable ones.
+- Text after a CSV field's closing quote is kept as part of the field instead of being dropped.
+  The new `CsvOptions.StrictQuotes` turns that and an unclosed quote into `InvalidDataException`.
+- Inserting or deleting a column inside a table keeps its column definitions and header row in
+  step with its range. A table whose width and definitions disagree is refused at save.
+
+### Changed
+
+- PDF export uses Inkwright 0.1.5 through exact package ranges.
+
 ## [0.1.4] - 2026-11-08
 
 ### Added
@@ -234,7 +273,8 @@ silence. The main ones as of this release:
 
 The full lists are in [docs/](docs/).
 
-[Unreleased]: https://github.com/WrightDocumentSuite/cellwright/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/WrightDocumentSuite/cellwright/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/WrightDocumentSuite/cellwright/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.4
 [0.1.3]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.3
 [0.1.2]: https://github.com/WrightDocumentSuite/cellwright/releases/tag/v0.1.2

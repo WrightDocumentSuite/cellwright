@@ -68,8 +68,14 @@ public static class CsvReader
                 nameof(DocumentLoadBudget.MaxInputBytes), options.LoadBudget.MaxInputBytes, remaining);
         }
 
+        // The limit is on bytes, and only the source stream knows how many there were: a decoded
+        // character can be up to four of them. Seekable or not, the same input gets the same answer.
         using var reader = new StreamReader(
-            stream, options.Encoding, detectEncodingFromByteOrderMarks: true, bufferSize: 16 * 1024, leaveOpen: options.LeaveOpen);
+            new ByteLimitedStream(stream, options.LoadBudget.MaxInputBytes, options.LeaveOpen),
+            options.Encoding,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: 16 * 1024,
+            leaveOpen: false);
         var parser = new StreamParser(options);
 
         while (true)
@@ -154,6 +160,62 @@ public static class CsvReader
         return false;
     }
 
+    /// <summary>Counts the bytes read through it and stops at the input limit.</summary>
+    private sealed class ByteLimitedStream(Stream inner, long maxBytes, bool leaveOpen) : Stream
+    {
+        private long _bytesRead;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            Counted(inner.Read(buffer, offset, count));
+
+        public override int Read(Span<byte> buffer) => Counted(inner.Read(buffer));
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            Counted(await inner.ReadAsync(buffer.AsMemory(offset, count), cancellationToken).ConfigureAwait(false));
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            Counted(await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false));
+
+        private int Counted(int read)
+        {
+            _bytesRead = DocumentLoadBudgetState.AddWithoutOverflow(_bytesRead, read);
+            DocumentLoadBudgetState.Ensure(nameof(DocumentLoadBudget.MaxInputBytes), maxBytes, _bytesRead);
+            return read;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && !leaveOpen)
+                inner.Dispose();
+
+            base.Dispose(disposing);
+        }
+    }
+
     private sealed class StreamParser(CsvOptions options)
     {
         private readonly DocumentLoadBudgetState _budget = new(options.LoadBudget);
@@ -183,6 +245,10 @@ public static class CsvReader
 
         public Memory<char> ChunkMemory => ChunkArray;
 
+        /// <summary>
+        /// A <see cref="TextReader"/> has no bytes to count, so its characters are held to the
+        /// input limit instead. For a stream this can never trip first: a character is at least a byte.
+        /// </summary>
         public void OnChunkRead(int count)
         {
             _chunkPos = 0;
@@ -212,6 +278,9 @@ public static class CsvReader
                 row = default;
                 return false;
             }
+
+            if (options.StrictQuotes && _state == State.QuotedField)
+                throw new InvalidDataException($"Row {_rowNumber + 1} ends inside a quoted field.");
 
             CompleteField();
             _state = State.StartOfRecord;
@@ -334,6 +403,11 @@ public static class CsvReader
                 return CompleteRecord(out row);
             }
 
+            if (options.StrictQuotes)
+                throw new InvalidDataException($"Row {_rowNumber + 1} has text after the closing quote of a field.");
+
+            // Dropping it would lose data without a trace; keeping it is what Excel does.
+            AppendFieldChar(c);
             _state = State.TrailingAfterQuote;
             row = default;
             return false;

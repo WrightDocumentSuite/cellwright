@@ -1,3 +1,4 @@
+using Cellwright.Formulas.Functions;
 using Cellwright.Formulas.Parsing;
 
 namespace Cellwright.Formulas.Engine;
@@ -36,6 +37,17 @@ internal sealed class DependencyIndex
     private List<int>?[] _dependents = [];
     private int[] _positions = [];
 
+    /// <summary>
+    /// Functions that look at where a reference points rather than at what it holds. A formula
+    /// using one can name its own cell without being circular: <c>ROW(A1)</c> in A1 is ordinary,
+    /// and so is <c>INDEX(A:A,ROW()-1)</c> at the bottom of a column.
+    /// </summary>
+    private static readonly HashSet<string> AddressOnlyFunctions = new(StringComparer.Ordinal)
+    {
+        "ROW", "COLUMN", "ROWS", "COLUMNS", "AREAS", "ISREF", "ISFORMULA", "FORMULATEXT",
+        "INDEX", "OFFSET", "CELL", "SHEET", "SHEETS",
+    };
+
     /// <summary>Every formula cell, in discovery order.</summary>
     public IReadOnlyList<FormulaEntry> Entries => _entries;
 
@@ -73,38 +85,81 @@ internal sealed class DependencyIndex
                 rows.Sort();
         }
 
+        var visitedNames = new HashSet<DefinedName>(ReferenceEqualityComparer.Instance);
         for (int i = 0; i < _entries.Count; i++)
         {
             FormulaEntry entry = _entries[i];
             context.MoveTo(entry.Sheet, entry.Cell);
-            foreach (FormulaRef reference in entry.Program.References)
-            {
-                // A spill reference names a rectangle that exists only after its anchor has
-                // run, so the edge goes to the anchor cell: when the anchor recalculates and
-                // its rectangle moves, the follow-up round reaches this formula through it.
-                if (reference.IsSpilled)
-                {
-                    Connect(i, entry, ResolveSpillAnchor(reference, entry.Sheet, context));
-                    continue;
-                }
-
-                Connect(i, entry, context.Resolve(reference));
-            }
-
-            // A structured reference resolves against the table's current shape. That shape only
-            // changes structurally, and a structural change rebuilds this index anyway, so the
-            // area it names now is the area it will name until then.
-            foreach (TableRef reference in entry.Program.TableReferences)
-                Connect(i, entry, context.Resolve(reference));
-
-            if (entry.Program.IsVolatile)
-                _volatile.Add(i);
-            if (entry.Program.DependsOnVisibility)
-                _visibilityDependent.Add(i);
+            visitedNames.Clear();
+            ConnectProgram(i, entry, entry.Program, context, visitedNames, nameDepth: 0);
         }
 
         _rangeDependents = _subscriptions.Build();
         BuildReverseEdges();
+    }
+
+    /// <summary>
+    /// Wires one program into the graph. A defined name is part of the formula that uses it, so
+    /// its references, volatility and nested names count as the formula's own; lookup follows
+    /// the scope of the using cell, as evaluation does.
+    /// </summary>
+    private void ConnectProgram(
+        int entryIndex,
+        FormulaEntry entry,
+        FormulaProgram program,
+        EvalContext context,
+        HashSet<DefinedName> visitedNames,
+        int nameDepth)
+    {
+        foreach (FormulaRef reference in program.References)
+        {
+            // A spill reference names a rectangle that exists only after its anchor has
+            // run, so the edge goes to the anchor cell: when the anchor recalculates and
+            // its rectangle moves, the follow-up round reaches this formula through it.
+            if (reference.IsSpilled)
+            {
+                Connect(entryIndex, entry, program, ResolveSpillAnchor(reference, entry.Sheet, context));
+                continue;
+            }
+
+            Connect(entryIndex, entry, program, context.Resolve(reference));
+        }
+
+        // A structured reference resolves against the table's current shape. That shape only
+        // changes structurally, and a structural change rebuilds this index anyway, so the
+        // area it names now is the area it will name until then.
+        foreach (TableRef reference in program.TableReferences)
+            Connect(entryIndex, entry, program, context.Resolve(reference));
+
+        // Entries are wired one at a time, so a repeat for this entry can only be the last item.
+        if (program.IsVolatile && (_volatile.Count == 0 || _volatile[^1] != entryIndex))
+            _volatile.Add(entryIndex);
+        if (program.DependsOnVisibility && (_visibilityDependent.Count == 0 || _visibilityDependent[^1] != entryIndex))
+            _visibilityDependent.Add(entryIndex);
+
+        if (nameDepth >= NameResolver.MaxNameDepth)
+            return;
+
+        foreach (Instruction instruction in program.Instructions)
+        {
+            if (instruction.Code != OpCode.PushName)
+                continue;
+
+            DefinedName? defined = context.Workbook.Names.Resolve(program.Strings[instruction.Operand], context.Sheet);
+            if (defined is not null && visitedNames.Add(defined) && context.GetNameProgram(defined.RefersTo) is { } named)
+                ConnectProgram(entryIndex, entry, named, context, visitedNames, nameDepth + 1);
+        }
+    }
+
+    private static bool OnlyInspectsAddresses(FormulaProgram program)
+    {
+        foreach (FunctionDefinition? function in program.Functions)
+        {
+            if (function is not null && AddressOnlyFunctions.Contains(function.Name))
+                return true;
+        }
+
+        return false;
     }
 
     private void BuildReverseEdges()
@@ -144,15 +199,15 @@ internal sealed class DependencyIndex
                 sheet, reference.Start.Row, reference.Start.Column, reference.Start.Row, reference.Start.Column);
     }
 
-    private void Connect(int entryIndex, FormulaEntry entry, ReferenceValue? reference)
+    private void Connect(int entryIndex, FormulaEntry entry, FormulaProgram program, ReferenceValue? reference)
     {
         // A 3-D reference resolves to a chain of areas, one per spanned sheet; each of them
         // subscribes on its own.
         for (ReferenceValue? area = reference; area is not null; area = area.Next)
-            ConnectArea(entryIndex, entry, area);
+            ConnectArea(entryIndex, entry, program, area);
     }
 
-    private void ConnectArea(int entryIndex, FormulaEntry entry, ReferenceValue area)
+    private void ConnectArea(int entryIndex, FormulaEntry entry, FormulaProgram program, ReferenceValue area)
     {
         if (area.FirstRow == area.LastRow && area.FirstColumn == area.LastColumn)
         {
@@ -162,7 +217,7 @@ internal sealed class DependencyIndex
             // A self-edge is kept on purpose: it is exactly how a cell like =A1+1 in A1
             // announces its own circular reference to the ordering pass.
             int precedent = IndexOf(area.Sheet, area.FirstRow, area.FirstColumn);
-            if (precedent >= 0)
+            if (precedent >= 0 && (precedent != entryIndex || !OnlyInspectsAddresses(program)))
                 entry.Precedents.Add(precedent);
             return;
         }
@@ -186,7 +241,7 @@ internal sealed class DependencyIndex
             for (int r = start; r < rows.Count && rows[r] <= area.LastRow; r++)
             {
                 int precedent = IndexOf(area.Sheet, rows[r], column);
-                if (precedent >= 0 && precedent != entryIndex)
+                if (precedent >= 0 && (precedent != entryIndex || !OnlyInspectsAddresses(program)))
                     entry.Precedents.Add(precedent);
             }
         }

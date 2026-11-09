@@ -23,6 +23,11 @@ Rendering never throws because of content it cannot draw. It draws what it can a
 in diagnostics — a batch job continues, and a person can later see which files deserve a visual
 check.
 
+To stop instead, set `RefuseWhen`. It sees every `PdfExportWarning`, and the render raises
+`PdfExportRefusedException` listing all the compromises it selects; no document is returned and a
+named file is left as it was. `PdfExportRefusal` has ready-made policies: `Omissions`,
+`OmissionsAndFontSubstitutions` and `AnyCompromise`.
+
 ## Get a document instead of saving
 
 `SaveAsPdf` is the short path. When the result must be signed, encrypted, or declared archival, the

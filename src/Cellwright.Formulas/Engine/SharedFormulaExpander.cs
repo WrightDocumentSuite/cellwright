@@ -41,21 +41,19 @@ internal static class SharedFormulaExpander
             return;
         }
 
-        for (int row = group.Range.Start.Row; row <= group.Range.End.Row; row++)
+        // Only the cells that declared membership: the range can enclose plain values, and
+        // writing a formula into one of those would replace the value on the next calculation.
+        foreach (CellRef cell in group.Members)
         {
-            for (int column = group.Range.Start.Column; column <= group.Range.End.Column; column++)
-            {
-                var cell = new CellRef(row, column);
-                if (cell == group.Master || sheet.Formulas.Get(row, column) is not null)
-                    continue;
+            if (cell == group.Master || sheet.Formulas.Get(cell.Row, cell.Column) is not null)
+                continue;
 
-                string text = FormulaRenderer.Render(
-                    master, workbook, row - group.Master.Row, column - group.Master.Column);
+            string text = FormulaRenderer.Render(
+                master, workbook, cell.Row - group.Master.Row, cell.Column - group.Master.Column);
 
-                // Written straight into the slice: this restores what the file already meant,
-                // so it must not look like a user edit that dirties the workbook.
-                sheet.Formulas.Set(row, column, text);
-            }
+            // Written straight into the slice: this restores what the file already meant,
+            // so it must not look like a user edit that dirties the workbook.
+            sheet.Formulas.Set(cell.Row, cell.Column, text);
         }
     }
 }

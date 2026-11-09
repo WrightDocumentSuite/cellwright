@@ -44,6 +44,12 @@ public sealed class FormulaGroup
     /// <summary>Formula text as written at the master cell, without the leading <c>=</c>.</summary>
     public string Text { get; }
 
+    /// <summary>
+    /// The cells that said they belong to a shared group. The master's range can enclose cells
+    /// holding plain values or formulas of their own, so the range alone does not say who is in.
+    /// </summary>
+    internal List<CellRef> Members { get; } = [];
+
     /// <inheritdoc/>
     public override string ToString() => $"{Kind} {Range} = {Text}";
 }

@@ -12,11 +12,47 @@ public sealed class ExcelTable
     /// <summary>Table name, unique within the workbook and usable in structured references.</summary>
     public required string Name { get; init; }
 
+    private RangeRef _range;
+    private IReadOnlyList<string> _columns = [];
+
+    /// <summary>The collection told about edits, so a loaded table is not saved as it was read.</summary>
+    internal TableCollection? Owner { get; set; }
+
     /// <summary>Cells the table covers, header row included.</summary>
-    public required RangeRef Range { get; set; }
+    /// <exception cref="ArgumentException">The new range is not as wide as <see cref="Columns"/>.</exception>
+    public required RangeRef Range
+    {
+        get => _range;
+        set
+        {
+            if (_range == value)
+                return;
+
+            if (Owner is not null && value.ColumnCount != _columns.Count)
+            {
+                throw new ArgumentException(
+                    $"Table '{Name}' has {_columns.Count} column(s), so its range cannot become {value.ColumnCount} wide.",
+                    nameof(value));
+            }
+
+            _range = value;
+            Owner?.MarkModified();
+        }
+    }
 
     /// <summary>Column names, left to right. One per column of <see cref="Range"/>.</summary>
-    public required IReadOnlyList<string> Columns { get; init; }
+    public required IReadOnlyList<string> Columns
+    {
+        get => _columns;
+        init => _columns = value;
+    }
+
+    /// <summary>Changes the range and the columns together, as a structural edit has to.</summary>
+    internal void Reshape(RangeRef range, IReadOnlyList<string> columns)
+    {
+        _range = range;
+        _columns = columns;
+    }
 
     /// <summary>Whether the first row of the range holds the column names.</summary>
     public bool HasHeaderRow { get; init; } = true;
@@ -113,6 +149,7 @@ public sealed class TableCollection : IReadOnlyList<ExcelTable>
                 nameof(table));
         }
 
+        table.Owner = this;
         _tables.Add(table);
         IsModified = true;
         return table;
@@ -125,12 +162,17 @@ public sealed class TableCollection : IReadOnlyList<ExcelTable>
             return false;
 
         _tables.Remove(table);
+        table.Owner = null;
         IsModified = true;
         return true;
     }
 
     /// <summary>Adds a table read from a file without marking the collection as edited.</summary>
-    internal void AddFromFile(ExcelTable table) => _tables.Add(table);
+    internal void AddFromFile(ExcelTable table)
+    {
+        table.Owner = this;
+        _tables.Add(table);
+    }
 
     /// <summary>Marks the collection as owned by the model, e.g. after a structural edit moved a table.</summary>
     internal void MarkModified() => IsModified = true;

@@ -81,7 +81,9 @@ Rules:
 reusable `RowData` buffers (compatible with `[ExcelRow]` source-generated mappers), `TimeSpan`
 duration inference (`[h]:mm:ss` / `hh:mm:ss`), and `DocumentLoadBudget` enforcement (`MaxInputBytes`,
 `MaxCells`, `MaxCellTextCharacters`, `MaxTotalCellTextCharacters`), alongside convenience helpers
-on `Workbook` and `Worksheet`:
+on `Workbook` and `Worksheet`. `MaxInputBytes` counts bytes of the source stream whether or not it
+is seekable. Text after a field's closing quote stays in the field, as in Excel; set
+`CsvOptions.StrictQuotes` to refuse that and unclosed quotes with `InvalidDataException`:
 
 ```csharp
 // Streaming CSV/TSV rows (constant buffer, works with [ExcelRow] T.ReadFrom(in row)):

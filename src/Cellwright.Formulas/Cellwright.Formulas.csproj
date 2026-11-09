@@ -11,7 +11,7 @@
     <RootNamespace>Cellwright.Formulas</RootNamespace>
     <IsPackable>true</IsPackable>
     <PackageId>Cellwright.Formulas</PackageId>
-    <Description>Formula engine for Cellwright: span-based parser into a compact RPN program, allocation-light stack-machine evaluator with Excel semantics, dependency-driven incremental recalculation and 447 worksheet functions. Zero reflection, Native AOT ready.</Description>
+    <Description>Formula engine for Cellwright: span-based parser into a compact RPN program, allocation-light stack-machine evaluator with Excel semantics, dependency-driven incremental recalculation and 468 worksheet functions. Zero reflection, Native AOT ready.</Description>
     <PackageTags>excel;xlsx;formula;calculation;spreadsheet;aot</PackageTags>
     <IsAotCompatible>true</IsAotCompatible>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
