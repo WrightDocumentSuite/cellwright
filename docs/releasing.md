@@ -11,7 +11,7 @@ All five packages ship together, under one version taken from
 
 | Package | Dependencies |
 | --- | --- |
-| `Cellwright` | — |
+| `Cellwright` | РІР‚вЂќ |
 | `Cellwright.Formulas` | `Cellwright`, `System.Numerics.Tensors` |
 | `Cellwright.Mapping` | `Cellwright` (analyzer bundled in the package) |
 | `Cellwright.Xls` | `Cellwright`, `Cellwright.Formulas` |
@@ -25,7 +25,7 @@ only then building the package that depends on it.
 
 ## Before release
 
-- **Cut from `main`.** SourceLink embeds the branch and commit SHA the package was built from — they
+- **Cut from `main`.** SourceLink embeds the branch and commit SHA the package was built from РІР‚вЂќ they
   appear in `<repository>` inside the `.nuspec`. A package built from a working branch names that
   branch aloud and sends the debugger to the wrong place.
 - **Set the version.** `<Version>` in [Directory.Build.props](../Directory.Build.props) is shared
@@ -58,7 +58,7 @@ Use the package verifier for development builds:
 pwsh ./eng/verify-packages.ps1
 ```
 
-It assigns one unique `0.1.4-dev.<UTC>.g<commit>.<random>` version to the whole package set, uses an
+It assigns one unique `0.1.5-dev.<UTC>.g<commit>.<random>` version to the whole package set, uses an
 isolated NuGet cache, validates the finished nuspecs and analyzer/SourceLink assets, installs the
 packages into an empty consumer, then publishes and runs that consumer with trimming and Native AOT.
 The output lives below `artifacts/package-verification/runs/<version>/`. A normal `dotnet pack` is
@@ -97,7 +97,7 @@ publishing, inspect one of them, for example with
 `unzip -l "$package_directory/Cellwright.X.Y.Z.nupkg"`, where `package_directory` is the printed
 path.
 
-- `lib/net10.0/` contains both `.dll` and `.xml` — XML documentation is included
+- `lib/net10.0/` contains both `.dll` and `.xml` РІР‚вЂќ XML documentation is included
   (`GenerateDocumentationFile`); without it, the IDE shows no tooltips.
 - `README.md` inside the package: it appears on the package page.
 - Beside each `.nupkg` lies a `.snupkg` with symbols.
@@ -147,7 +147,7 @@ The `.snupkg` follows its `.nupkg` on the same `push` automatically.
 Do not store the API key in the repository or pass it on a command line that shell history records:
 use an environment variable or a CI secret only.
 
-After publication — tag and GitHub release:
+After publication РІР‚вЂќ tag and GitHub release:
 
 ```bash
 git tag -a vX.Y.Z -m "Cellwright X.Y.Z"
@@ -170,7 +170,7 @@ missing required content.
 ## What is not here yet
 
 Publication is manual: workflows under `.github/workflows/` build, test, and upload artifacts, but
-do not push anywhere. While releases are rare, that is arguably a feature — an irreversible action
+do not push anywhere. While releases are rare, that is arguably a feature РІР‚вЂќ an irreversible action
 stays deliberate. When they become frequent, add a separate workflow on tag `v*` with the key in
 secrets and the same checks listed above.
 
@@ -199,3 +199,5 @@ After all five packages are indexed, advance `CellwrightPackageBaselineVersion` 
 verifier's default `BaselineVersion` to that release, then run CI. This makes newly
 published APIs part of the next compatibility check. Keep the release tag at the
 original validated commit.
+
+For a just-published dependency, isolate both `NUGET_PACKAGES` and `NUGET_HTTP_CACHE_PATH`. A clean packages directory alone can still reuse an older HTTP version index and produce NU1102. Use `dotnet restore --no-http-cache` when refreshing the new release graph, then repeat locked restore; do not clear unrelated developer caches.

@@ -39,7 +39,7 @@
   <PropertyGroup Label="Opt-in release package validation">
     <!-- Package validation adds PackageDownload items during restore, so keep it out of
          ordinary local builds. eng/verify-packages.ps1 enables this gate explicitly. -->
-    <CellwrightPackageBaselineVersion>0.1.4</CellwrightPackageBaselineVersion>
+    <CellwrightPackageBaselineVersion>0.1.5</CellwrightPackageBaselineVersion>
     <EnablePackageValidation Condition="'$(CellwrightEnablePackageValidation)' == 'true'">true</EnablePackageValidation>
     <PackageValidationBaselineVersion Condition="'$(CellwrightEnablePackageValidation)' == 'true'">$(CellwrightPackageBaselineVersion)</PackageValidationBaselineVersion>
   </PropertyGroup>
@@ -53,8 +53,8 @@
 
          Deliberately not conditioned on IsPackable, unlike the README item below, and the
          difference is not an oversight. MSBuild evaluates every property in document order before
-         it evaluates any item: a condition here would read the IsPackable set a few lines up —
-         false — because the project that overrides it to true is imported afterwards. The item
+         it evaluates any item: a condition here would read the IsPackable set a few lines up вЂ”
+         false вЂ” because the project that overrides it to true is imported afterwards. The item
          group is evaluated in a later pass and does see the project's value. These properties do
          nothing to a project nobody packs, so setting them for all of them costs nothing and
          cannot silently do nothing, which the conditioned form would. -->
