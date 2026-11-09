@@ -1,296 +1,170 @@
 # Benchmarks
 
-Scenario: 100,000 rows × 20 columns (2 million cells) — numbers, repeated strings, dates, and
-booleans. Each library uses its idiomatic per-cell API. BenchmarkDotNet 0.15.8,
-RunStrategy.Monitoring (1 warmup plus 3 or 5 iterations depending on the class), MemoryDiagnoser.
+Measured on **2026-11-09**, Cellwright **0.1.4**, [public source `9540bfbf66a9`](https://github.com/WrightDocumentSuite/cellwright/tree/9540bfbf66a9b54f93504f016ccfee0616a78138).
 
-Every table below comes from one measurement session, 2026-08-01 — mixing runs is what makes a
-benchmark page disagree with itself. Environment: Intel Core i7-8700, Windows Server 2022,
-.NET SDK 10.0.302 on .NET 10.0.10 (X64 RyuJIT x86-64-v3). Measurements were taken on a machine under
-background load, and the confidence intervals show it: for several rows the reported error exceeds
-the mean. Absolute numbers are therefore conservative and the relative ratios are the meaningful
-part. Where a mean is dominated by one slow iteration the table says so and reports the median
-instead. Versions: EPPlus 8.6.3, ClosedXML 0.105.0, ExcelDataReader 3.7.0.
+Environment: Microsoft Windows Server 2025 Datacenter (build 26100), Intel Xeon Gold 5412U, 24 cores / 48 logical processors, 255.7 GiB RAM; .NET SDK 10.0.403, .NET 10.0.14 (10.0.14, 10.0.1426.52326), BenchmarkDotNet 0.15.8.
 
-## Write (2 million cells to MemoryStream)
+The server also ran other workloads. Suites and benchmark classes ran sequentially with their committed job parameters. These are shared-host measurements; the August i7-8700 results are a different hardware baseline and do not establish a code speedup.
 
-| Method | Time (mean) | Allocations | Gen0/Gen1/Gen2 |
-| --- | ---: | ---: | --- |
-| **Cellwright streaming** | **2.49 s** | **32 MB** | 0 / 0 / 0 |
-| **Cellwright DOM** | 2.51 s | 78 MB | 1k / 0 / 0 |
-| ClosedXML | 8.91 s | 2,095 MB | 25k / 6k / 3k |
-| EPPlus 8 | 10.73 s | 2,142 MB | 33k / 14k / 9k |
+Tables use the first complete pass throughout. Timings and allocations are per operation; KiB and MiB are binary units. Error is BenchmarkDotNet's reported confidence margin, N is its retained sample count, and CV is standard deviation divided by mean. High-CV rows and confidence margins larger than the mean should be treated as noisy observations.
 
-The streaming writer is 3.6× faster than ClosedXML and 4.3× faster than EPPlus, with **65×**
-fewer allocations (64.7× and 66.2× respectively) — no Gen2 collections at all, and no Gen0 either.
-The DOM path is almost as fast: data lives in column slices, and save runs through the same
-streaming writer.
+The [machine-readable snapshot](benchmark-results/2026-11-09.json) records exact assembly versions, hashes, source commit, and every measured row. Runtime servicing and competitor versions are part of this snapshot, rather than labels copied from the previous tables.
 
-## Read (all cells, checksum)
+| Assembly | Product version |
+| --- | --- |
+| `BenchmarkDotNet.Annotations.dll` | `0.15.8+1e8238ef6c08e18821edae83ac8d6b0a2bb1bb98` |
+| `BenchmarkDotNet.dll` | `0.15.8+1e8238ef6c08e18821edae83ac8d6b0a2bb1bb98` |
+| `Cellwright.Benchmarks.dll` | `0.1.4+9540bfbf66a9b54f93504f016ccfee0616a78138` |
+| `Cellwright.dll` | `0.1.4+9540bfbf66a9b54f93504f016ccfee0616a78138` |
+| `Cellwright.Formulas.dll` | `0.1.4+9540bfbf66a9b54f93504f016ccfee0616a78138` |
+| `Cellwright.Pdf.dll` | `0.1.4+9540bfbf66a9b54f93504f016ccfee0616a78138` |
+| `Cellwright.Xls.dll` | `0.1.4+9540bfbf66a9b54f93504f016ccfee0616a78138` |
+| `ClosedXML.dll` | `0.105.0+d15f6690886801980c0d83b7eb1d1b5d2171ad31` |
+| `ClosedXML.Parser.dll` | `1.0.0+658973aeedc2fe289e0ccba2bb9959f67692ded5` |
+| `DocumentFormat.OpenXml.dll` | `3.1.1+Branch.main.Sha.f9e6ad7524e22b6b1f932deabc9055201b7870c0.f9e6ad7524e22b6b1f932deabc9055201b7870c0` |
+| `DocumentFormat.OpenXml.Framework.dll` | `3.1.1+Branch.main.Sha.f9e6ad7524e22b6b1f932deabc9055201b7870c0.f9e6ad7524e22b6b1f932deabc9055201b7870c0` |
+| `EPPlus.dll` | `8.6.3+21b0af6b3d004bcfe8cbfd5c03893fb9915bcb9f` |
+| `EPPlus.Interfaces.dll` | `8.6.2+d8416ee1c78423f478a891b0b2112da6e0919e48` |
+| `ExcelDataReader.dll` | `3.7.0+840007736467bb66be083764021a3a6b9afad5c2` |
+| `Inkwright.dll` | `0.1.4+5028efe3b640193b92863f7b94f3452809d88107` |
 
-| Method | Time (mean) | Allocations | Gen0/Gen1/Gen2 |
-| --- | ---: | ---: | --- |
-| **Cellwright streaming** | **2.99 s** | **607 MB** | 241k / 0 / 0 |
-| **Cellwright DOM** | 3.08 s | 655 MB | 77k / 5k / 2k |
-| EPPlus 8 | 5.20 s | 1,782 MB | 37k / 14k / 8k |
-| ClosedXML | 11.86 s | 2,634 MB | 23k / 10k / 5k |
+The EPPlus write allocation total is unavailable for comparison: its raw export reports 0 B despite nonzero Gen0/Gen1/Gen2 collection counts. The raw report is retained, but the zero is not presented as an allocation-free operation. Timing statistics remain reported.
 
-Read is 1.7× faster than EPPlus and 4.0× faster than ClosedXML. The gap to EPPlus is much narrower
-than the write gap: reading is dominated by producing strings, which every engine has to do.
-Read allocations are mostly text cell strings (unavoidable with a string API) plus `XmlReader`
-buffers; further optimization (a custom UTF-8 XML parser instead of `XmlReader`) is a v1.1
-candidate. Note how the allocation profile differs from the competition's: 607 MB in short-lived
-Gen0 garbage that never survives a collection, against 1.8–2.6 GB that repeatedly reaches Gen2.
+## AggregateBenchmarks
 
-## Legacy .xls: read and write (50,000 rows × 4 columns)
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| SumOneMillionCells | Cells=1000000 | 21.194 ms | 25.742 ms | 20.533 ms | 176 B | 5 | 31.5% |
 
-A binary workbook written by this same package so both readers see exactly the same file. The old
-grid stops at 65,536 rows, so the scenario is smaller than the xlsx one.
+## AutoFitBenchmarks
 
-| Method | Time (median) | Allocations |
-| --- | ---: | ---: |
-| **Cellwright: read to DOM** | **28.9 ms** | **18.1 MB** |
-| **Cellwright: row streaming** | 56.4 ms | 17.0 MB |
-| ExcelDataReader 3.7: read | 193.5 ms | 96.1 MB |
-| **Cellwright: write** | 116.9 ms | 26.4 MB |
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Columns | Rows=20000 | 167.689 ms | 1.055 s | 197.895 ms | 22.209 MiB | 3 | 34.5% |
+| ColumnsSampled | Rows=20000 | 16.998 ms | 47.983 ms | 16.318 ms | 2.278 MiB | 3 | 15.5% |
+| ColumnsAndRows | Rows=20000 | 203.051 ms | 2.818 s | 134.190 ms | 44.522 MiB | 3 | 76.1% |
 
-Read allocations are 5.3× lower than ExcelDataReader: records are parsed as spans directly from
-the stream buffer, and values land in column slices without a per-cell object. This is the noisiest
-table on the page — the reported error is larger than the mean for every row, which is why it gives
-medians; allocations are deterministic and can be compared directly. There is no third-party
-baseline for write: ExcelDataReader is read-only.
+## CopiedFormulaBenchmarks
 
-Write costs more than it did before 0.1.0 — 26.4 MB against 10.6 MB, and 117 ms against 83 ms, on
-the same workbook. The writer grew by some 1,900 lines over that period, gaining page setup,
-property-set streams, data validation, conditional formatting and the Office Art layer. The
-conditional-format, validation and drawing paths all return early on a sheet that has none of
-those, so they are not the cause; the extra cost has not been attributed to a specific record
-writer and is worth a profile before 1.0.
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| RelativeExpression | Rows=100000 | 21.833 ms | 5.553 ms | 21.993 ms | 4.578 MiB | 3 | 1.4% |
 
-Streaming is not faster than DOM read and should not be: it saves not time but what stays in memory
-afterward. Rows are yielded one at a time, but the container and row table are still read whole —
-that is the nature of the format; see [xls.md](xls.md).
+## CopiedRangeCacheBenchmarks
 
-## Formulas: full recalculation (50,000 rows, 100,000 formulas)
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| SlidingVlookup | Rows=70000 | 126.023 ms | 1.099 s | 99.261 ms | 129.776 MiB | 3 | 47.8% |
 
-A report workbook: two columns of constants, `C=A*B*VLOOKUP(...)` against a 100-row lookup table,
-a nested `IF` in column D, and summary `SUM`/`COUNTIF`. Each engine opens the same file and
-recalculates from scratch.
+## FormulaCalcBenchmarks
 
-| Method | Time (mean) | Allocations |
-| --- | ---: | ---: |
-| **Cellwright** | **1.60 s** | 380 MB |
-| EPPlus 8 | 4.54 s | not reported |
-| ClosedXML 0.105 | 142.91 s | 1,067 MB |
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Cellwright | Rows=50000 | 1.016 s | 1.342 s | 982.680 ms | 397.700 MiB | 3 | 7.2% |
+| ClosedXml | Rows=50000 | 80.545 s | 1.553 s | 80.573 s | 1,066.783 MiB | 3 | 0.1% |
+| EpPlus | Rows=50000 | 2.027 s | 3.650 s | 1.952 s | 1,606.073 MiB | 3 | 9.9% |
 
-2.8 times faster than EPPlus and 89 times faster than ClosedXML. Most of that time goes to reading
-the package, not calculating: a pure recalc of the same workbook takes 122 ms (see the next
-section), so the file read accounts for roughly nine tenths of the figure above.
+## FormulaParseBenchmarks
 
-Two caveats on this table. MemoryDiagnoser reported no allocation total for EPPlus in this session
-even though it collected Gen0 45,000 times, so the cell says what was measured rather than a number
-carried over from an earlier run. And ClosedXML's own spread here is enormous — ±75 s of error
-around a 143 s mean — so the 89× is a floor, not a precise ratio: an earlier session on the same
-machine put the same comparison at 125×.
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Distinct | Count=10000 | 9.110 ms | 1.127 ms | 9.136 ms | 17.351 MiB | 4 | 1.9% |
+| Cached | Count=10000 | 162.274 µs | 5.297 µs | 162.169 µs | 12.922 KiB | 5 | 0.8% |
+| Render | Count=10000 | 14.581 ms | 986.677 µs | 14.457 ms | 24.948 MiB | 5 | 1.8% |
 
-## Formulas: pure recalculation (no file read)
+## FormulaRecalcBenchmarks
 
-The same report workbook, but only `Calculate` is measured: reading the package takes longer than
-the calculation itself and hides in the combined number.
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| SeparateSheet | Rows=50000 | 76.670 ms | 36.029 ms | 72.156 ms | 13.733 MiB | 5 | 12.2% |
+| SameSheet | Rows=50000 | 71.560 ms | 32.488 ms | 68.733 ms | 13.733 MiB | 5 | 11.8% |
 
-| Scenario | Time (mean) | Allocations |
-| --- | ---: | ---: |
-| Lookup table on a separate sheet | 121.6 ms | 13.73 MB |
-| Lookup table on the same sheet as the results | 123.0 ms | 13.73 MB |
+## IncrementalCalcBenchmarks
 
-One hundred thousand formulas recalculate in 122 ms. The match between the two rows is the main
-point — 1% apart, on identical allocations: in the second case every computed result lands on the
-same sheet as the lookup table, and coarse sheet-version invalidation would flush the cache on
-every row. Rectangle-based invalidation does not.
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Chain |  | 7.149 ms | 8.021 ms | 6.463 ms | 1.048 MiB | 5 | 29.1% |
+| Independent |  | 175.140 µs | 65.708 µs | 176.700 µs | 496 B | 5 | 9.7% |
+| Forced |  | 19.049 ms | 7.237 ms | 18.961 ms | 2.289 MiB | 5 | 9.9% |
 
-Before the range cache, each of 50,000 `VLOOKUP` calls copied the whole table: the same scenario
-with load cost 557 MB of allocations versus 13.7 MB for recalc today.
+## PdfBenchmarks
 
-## Formulas: range subscription lookup
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Plain | Rows=20000 | 387.897 ms | 3.989 s | 307.994 ms | 109.398 MiB | 3 | 56.4% |
+| Sparse | Rows=20000 | 14.082 ms | 54.665 ms | 12.755 ms | 6.395 MiB | 3 | 21.3% |
+| Styled | Rows=20000 | 478.451 ms | 3.777 s | 401.938 ms | 145.306 MiB | 3 | 43.3% |
+| Tagged | Rows=20000 | 692.607 ms | 3.408 s | 640.868 ms | 464.910 MiB | 3 | 27.0% |
+| Conditional | Rows=20000 | 428.963 ms | 2.174 s | 363.500 ms | 206.115 MiB | 3 | 27.8% |
+| Graded | Rows=20000 | 484.098 ms | 3.307 s | 400.555 ms | 216.395 MiB | 3 | 37.4% |
 
-Editing a cell must find formulas that read it through a range. The benchmark isolates the lookup
-structure: 50,000 subscriptions of the form `SUM(A$1:A{n})`, none repeated.
+## RangeEditBenchmarks
 
-| Method | Time (mean) |
-| --- | ---: |
-| Interval index | 57.5 ns |
-| Linear scan of the same subscriptions | 105.2 µs |
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| EditOutsideRanges | Formulas=50000 | 85.060 µs | 55.356 µs | 79.000 µs | 144 B | 5 | 16.9% |
+| EditInsideSharedTable | Formulas=50000 | 63.349 ms | 53.087 ms | 67.985 ms | 10.894 MiB | 5 | 21.8% |
+| EditAmongDistinctRanges | Formulas=50000 | 405.420 µs | 191.694 µs | 382.100 µs | 496 B | 5 | 12.3% |
 
-An 1,835× difference. Neither variant allocates; only the number of subscriptions touched to
-answer changes.
+## ReadBenchmarks
 
-At workbook level it looks like this:
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CellwrightStreaming | Rows=100000 | 2.024 s | 320.361 ms | 2.027 s | 626.729 MiB | 3 | 0.9% |
+| CellwrightDom | Rows=100000 | 2.097 s | 462.444 ms | 2.096 s | 674.461 MiB | 3 | 1.2% |
+| ClosedXml | Rows=100000 | 5.283 s | 5.763 s | 5.128 s | 2,617.666 MiB | 3 | 6.0% |
+| EpPlus | Rows=100000 | 2.410 s | 1.069 s | 2.392 s | 1,782.266 MiB | 3 | 2.4% |
 
-| Scenario (50,000 range formulas) | Time (mean) | Allocations |
-| --- | ---: | ---: |
-| Edit outside all subscribed ranges | 72.2 µs | 144 B |
-| Edit found among 50,000 distinct ranges | 781 µs | 496 B |
-| Edit in a table read by 50,000 formulas | 72.2 ms | 11.4 MB |
+## SubscriptionLookupBenchmarks
 
-The last row is not about lookup but about work volume: editing the lookup table dirties all fifty
-thousand dependent formulas, and they genuinely need recalculation.
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Indexed | Subscriptions=50000 | 25.921 ns | 0.614 ns | 25.916 ns | 0 B | 4 | 0.4% |
+| Linear | Subscriptions=50000 | 51.373 µs | 8.928 µs | 50.779 µs | 0 B | 5 | 4.5% |
 
-## Formulas: incremental recalculation
+## WriteBenchmarks
 
-The workbook is already calculated; one cell changes. The dependency graph exists so edit cost
-follows the size of the affected subgraph, not the size of the workbook.
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CellwrightStreaming | Rows=100000 | 1.373 s | 1.300 s | 1.378 s | 32.299 MiB | 3 | 5.2% |
+| CellwrightDom | Rows=100000 | 1.293 s | 303.767 ms | 1.294 s | 78.412 MiB | 3 | 1.3% |
+| ClosedXml | Rows=100000 | 4.159 s | 1.115 s | 4.126 s | 2,094.892 MiB | 3 | 1.5% |
+| EpPlus | Rows=100000 | 5.981 s | 3.154 s | 5.983 s | unavailable | 3 | 2.9% |
 
-| Scenario | Time (median) | Allocations |
-| --- | ---: | ---: |
-| Edit with a chain of 10,000 dependent formulas behind it | 6.3 ms | 1.1 MB |
-| Edit of one of 50,000 independent formulas | **96.8 µs** | 496 B |
-| Forced full recalc of the same 50,000 formulas | 33.3 ms | 2.4 MB |
+## XlsBenchmarks
 
-Medians again: the forced recalc row measured 54 ms on average with ±36 ms of error, one slow
-iteration against two fast ones, so the mean says more about the machine than about the code.
+| Method | Parameters | Mean | Error | Median | Allocated | N | CV |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CellwrightRead | Rows=50000 | 53.423 ms | 181.919 ms | 53.513 ms | 23.861 MiB | 3 | 18.7% |
+| CellwrightStreamRows | Rows=50000 | 103.456 ms | 126.555 ms | 100.301 ms | 22.766 MiB | 3 | 6.7% |
+| ExcelDataReaderRead | Rows=50000 | 190.709 ms | 1.662 s | 241.591 ms | 96.126 MiB | 3 | 47.8% |
+| CellwrightWrite | Rows=50000 | 53.865 ms | 27.764 ms | 53.689 ms | 10.605 MiB | 3 | 2.8% |
 
-A local edit costs roughly 340× less than a full recalc and almost no allocations. The first
-version of traversal cost 5.5 ms for the same edit because it scanned the entire formula list;
-reverse edges in the index and breadth-first traversal made cost proportional to the affected
-subgraph. The 10,000-formula chain case cannot get cheaper: all 10,000 genuinely need
-recalculation.
+## Reproduce
 
-## Formulas: parsing
+Use a clean standalone public checkout at the source commit above, the pinned SDK, and the required fonts. Run each class in a separate process with a distinct artifact directory; this avoids shared generated-build cleanup between benchmark sessions.
 
-10,000 formulas of seven typical shapes, parsed into an RPN program.
-
-| Scenario | Time (mean) | Allocations |
-| --- | ---: | ---: |
-| 10k distinct formulas | 17.6 ms | 16.9 MB |
-| 10k formulas via `ProgramCache` (7 unique) | 0.44 ms | 12.6 KB |
-| 10k formulas: parse plus reverse render to A1 | 31.4 ms | 24.5 MB |
-
-That is about 570,000 formulas per second on a cold parse. Real sheets repeat one formula down a
-column, and the program cache applies: the same 10,000 cells cost 40× less and three orders of
-magnitude fewer allocations.
-
-There is no third-party parsing baseline on purpose: the parser shipped with ClosedXML exposes a
-visitor interface with two dozen members, and a comparison would mostly measure an adapter written
-for it.
-
-## Formulas: copied conditions and sliding range cache
-
-These are forward baselines for the copy-aware conditional-format path added in Stage A. One
-operation is the complete loop shown in the scenario — allocations are not per cell. The copied
-expression was invoked five times inside each measured iteration so the iteration stayed above
-BenchmarkDotNet's 100 ms recommendation; the table still reports one 100,000-cell operation.
-
-| Scenario | Calls | Time (mean) | Allocations |
-| --- | ---: | ---: | ---: |
-| Copied `$A1>0` expression | 100,000 | **46.13 ms** | **4.58 MB** |
-| Copied `VLOOKUP` over a sliding `A1:B32` | 70,000 | **202.48 ms** | **129.78 MB** |
-
-The expression keeps one compiled program and applies only the row/column delta at execution; unit
-tests enforce that cache count as well as mixed `$` axes, `#REF!` at the grid boundary, and
-structured `[@Column]` on the target row. Dynamic formula text produced by `INDIRECT` has a separate
-1,024-entry exact LRU so cardinality cannot grow with the sheet.
-
-The sliding lookup intentionally goes beyond the old retained-cell cliff: every `A1:B32` rectangle
-contains 64 cells, so a two-million-cell budget begins evicting after roughly 31,250 distinct
-ranges. The 70,000-range pass exercises eviction throughout its second half. The current cache uses
-stored global and per-sheet list nodes, making hit, insertion, eviction, and unlink O(1); this row is
-the baseline for future profiles, not a speedup claim against an unmeasured implementation.
-
-## PDF export (20,000 rows × 5 columns)
-
-Rendering builds 445 pages in memory. The dense cases hold 100,000 values; the sparse case names
-the same `A1:E20000` print area but occupies only `A1`.
-
-| Scenario | Time (mean) | Allocations |
-| --- | ---: | ---: |
-| Plain dense sheet | 533.81 ms | 106.57 MB |
-| Sparse explicit print area | **23.64 ms** | **6.32 MB** |
-| Number formats | 642.05 ms | 124.72 MB |
-| Tagged PDF | 1,147.01 ms | 402.46 MB |
-| Two comparison rules | 682.43 ms | 191.63 MB |
-| Color scale and data bar | 816.88 ms | 203.65 MB |
-
-The sparse fast path deliberately keeps every requested page but avoids cell passes that cannot
-draw anything. In a back-to-back run on the same machine, the sparse case moved from 54.96 ms to
-23.64 ms (2.32×); allocations stayed at 6.32 MB because page objects still have to exist. The job
-uses three measured iterations, so the absolute confidence interval is wide; the before range
-(46.77–61.89 ms) and after range (19.16–29.48 ms) did not overlap.
-
-## Stage A verification snapshot (2026-08-01)
-
-The production fixes were bracketed with the same serial Release commands on Windows Server 2022,
-.NET SDK 10.0.302, and an Intel Core i7-8700 (6 cores / 12 threads). The baseline was captured
-before the conditional-format and sparse-rendering changes; the final column includes them.
-
-| Check | Baseline | After Stage A |
-| --- | ---: | ---: |
-| Clean Release build, wall clock | 372.523 s | 26.291 s |
-| Build warnings / errors | 0 / 0 | 0 / 0 |
-| Full Release test run, wall clock | 251.724 s | 207.523 s |
-| Passed / skipped / failed | 1,834 / 1 / 0 | **1,947 / 1 / 0** |
-| Total test cases | 1,835 | **1,948** |
-
-The final test count is Formulas 894, Mapping 9, PDF 184, Core 579 (578 passed and one intentional
-culture skip), and XLS/BIFF/XLSB 282. The 113 additional cases cover the corrected semantics and
-round trips. Build and test wall-clock values are verification telemetry, not performance
-benchmarks: compiler and filesystem caches make the build columns especially unsuitable for a
-speedup claim. The PDF and copied-formula tables above are the controlled BenchmarkDotNet
-measurements.
-
-## x14 icon-set verification snapshot (2026-08-02)
-
-The first read-only x14 projection was gated with the same serial Release commands and environment
-as Stage A. This is the post-change, warmed verification run; the implementation adds no public
-editable rules and does not include the separate extended-data-bar stage.
-
-| Check | After Stage A | After x14 icon sets |
-| --- | ---: | ---: |
-| No-incremental Release build, wall clock | 26.291 s | **26.937 s** |
-| Build warnings / errors | 0 / 0 | **0 / 0** |
-| Full Release test run, wall clock | 207.523 s | **235.293 s** |
-| Passed / skipped / failed | 1,947 / 1 / 0 | **1,976 / 1 / 0** |
-| Total test cases | 1,948 | **1,977** |
-
-The 29 added cases are 22 core cases and 7 PDF cases. They cover four producer-generated
-non-custom rules, three custom opaque rules, `gte`, reverse, hidden values, worksheet-wide
-priorities, XML preservation and structural invalidation, plus the three new vector families. The
-focused conditional-format runs were 52/52 core cases in 4 seconds and 21/21 PDF cases in 1 second.
-
-Wall-clock values remain telemetry: the unchanged XLS test project alone took 2 minutes 25 seconds
-in this run and dominated the 27.770-second difference. The controlled BenchmarkDotNet baselines
-above were not rerun because this stage changes x14 parsing and icon geometry, not the measured
-copied-formula, sparse-layout, or data-bar paths.
-
-```bash
-dotnet build Cellwright.slnx -c Release --no-restore --no-incremental --verbosity minimal -m:1 /nodeReuse:false
-dotnet test Cellwright.slnx -c Release --no-build --no-restore --verbosity minimal -m:1 /nodeReuse:false
+```sh
+dotnet restore benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --locked-mode
+dotnet build benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj -c Release --no-restore
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.AggregateBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/AggregateBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.AutoFitBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/AutoFitBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.CopiedFormulaBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/CopiedFormulaBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.CopiedRangeCacheBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/CopiedRangeCacheBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.FormulaCalcBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/FormulaCalcBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.FormulaParseBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/FormulaParseBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.FormulaRecalcBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/FormulaRecalcBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.IncrementalCalcBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/IncrementalCalcBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.PdfBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/PdfBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.RangeEditBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/RangeEditBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.ReadBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/ReadBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.SubscriptionLookupBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/SubscriptionLookupBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.WriteBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/WriteBenchmarks"
+dotnet run -c Release --project benchmarks/Cellwright.Benchmarks/Cellwright.Benchmarks.csproj --no-build -- --filter "Cellwright.Benchmarks.XlsBenchmarks.*" --exporters json --artifacts "BenchmarkDotNet.Artifacts/XlsBenchmarks"
 ```
 
-## How to reproduce
+For a new comparison, rerun the complete suite and retain the environment and raw reports.
 
-```bash
-dotnet build Cellwright.slnx -c Release
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *ReadBenchmarks*
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *WriteBenchmarks*
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *FormulaParseBenchmarks*
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *FormulaCalcBenchmarks*
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *FormulaRecalcBenchmarks*
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *IncrementalCalcBenchmarks*
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *RangeEditBenchmarks*
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *SubscriptionLookupBenchmarks*
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *CopiedFormulaBenchmarks*
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *CopiedRangeCacheBenchmarks*
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *XlsBenchmarks*
-dotnet run -c Release --project benchmarks/Cellwright.Benchmarks --no-build -- --filter *PdfBenchmarks*
-```
+## Historical results and correctness
 
-`FormulaCalcBenchmarks` dominates the wall clock: ClosedXML spends two and a half minutes per
-iteration there, so that one command alone runs for about ten minutes and the whole list for
-something under half an hour.
-
-Run the whole list before editing this page. Every table here is from one session on purpose — the
-machine's noise is large enough that numbers taken weeks apart cannot be compared with each other,
-and a page that mixes them ends up claiming ratios no single run ever produced.
-
-Run each benchmark class with a separate command: BenchmarkSwitcher cleans generated artifacts
-between sessions, and a single `--filter *` breaks the second session.
+The [previous benchmark document](https://github.com/WrightDocumentSuite/cellwright/blob/9540bfbf66a9b54f93504f016ccfee0616a78138/docs/benchmarks.md) preserves the August measurements and their correctness/corpus notes. Corpus snapshots and build/test wall-clock telemetry are separate evidence from the measurements above.

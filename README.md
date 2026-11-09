@@ -191,20 +191,18 @@ await foreach (RowData row in rows.ReadRowsAsync(0))
 
 ## Performance
 
-100 000 rows × 20 columns (2 million cells); details in [docs/benchmarks.md](docs/benchmarks.md):
+Measured on 2026-11-09 with Cellwright 0.1.4, .NET SDK 10.0.403 and runtime 10.0.14 on a shared Xeon Gold 5412U server. Full confidence intervals, exact versions and source commit are in [docs/benchmarks.md](docs/benchmarks.md).
 
-| | Write | Allocated | Read | Allocated |
+100,000 rows × 20 columns (2 million cells).
+
+| Method | Write mean | Allocated | Read mean | Allocated |
 | --- | ---: | ---: | ---: | ---: |
-| **Cellwright (streaming)** | **2.5 s** | **32 MB** | **3.0 s** | **607 MB** |
-| Cellwright (DOM) | 2.5 s | 78 MB | 3.1 s | 655 MB |
-| ClosedXML 0.105 | 8.9 s | 2 095 MB | 11.9 s | 2 634 MB |
-| EPPlus 8.6 | 10.7 s | 2 142 MB | 5.2 s | 1 782 MB |
+| CellwrightStreaming | 1.373 s | 32.299 MiB | 2.024 s | 626.729 MiB |
+| CellwrightDom | 1.293 s | 78.412 MiB | 2.097 s | 674.461 MiB |
+| ClosedXml | 4.159 s | 2,094.892 MiB | 5.283 s | 2,617.666 MiB |
+| EpPlus | 5.981 s | unavailable | 2.410 s | 1,782.266 MiB |
 
-Recalculating 100 000 formulas (VLOOKUP against a lookup table, nested IF, totals) takes 122 ms;
-editing one cell of an already calculated workbook, from 72 µs.
-
-Legacy `.xls`, 200 000 cells: 29 ms to read against 193 ms for ExcelDataReader, 18.1 MB allocated
-against 96.1 MB.
+Shared-host timings include background-load variation. Compare methods within this snapshot; the older i7-8700 tables describe a different environment.
 
 ## Documentation
 
