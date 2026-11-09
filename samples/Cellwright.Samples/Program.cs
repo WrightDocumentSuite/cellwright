@@ -18,6 +18,9 @@ await FormulaSample.RunAsync(outputDirectory);
 Console.WriteLine("Legacy .xls:");
 await XlsSample.RunAsync(outputDirectory);
 
+await CsvRoundTrip.RunAsync(outputDirectory);
+await ChartReport.RunAsync(outputDirectory);
+await NamedRangeBudget.RunAsync(outputDirectory);
 Console.WriteLine("Done.");
 return;
 

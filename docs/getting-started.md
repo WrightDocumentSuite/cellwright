@@ -114,3 +114,7 @@ the current process temporary directory and prints that location at startup.
 Public examples use English text for sheet names, headings, notes, metadata and
 console output. When changing sheet names or property keys, update formulas,
 lookups and validation values together so the examples still round-trip.
+
+## More runnable examples
+
+See the [sample catalog](../samples/README.md) for csv, charts, named ranges, expected output files and run instructions. Each new example creates its own input and verifies the saved result.
