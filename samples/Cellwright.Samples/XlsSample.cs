@@ -15,11 +15,11 @@ public static class XlsSample
         string legacyPath = Path.Combine(outputDirectory, "legacy.xls");
 
         Workbook original = Workbook.Create();
-        Worksheet sheet = original.Sheets.Add("Продажи");
+        Worksheet sheet = original.Sheets.Add("Sales");
 
-        sheet["A1"] = CellValue.Text("Товар");
-        sheet["B1"] = CellValue.Text("Количество");
-        sheet["C1"] = CellValue.Text("Сумма");
+        sheet["A1"] = CellValue.Text("Product");
+        sheet["B1"] = CellValue.Text("Quantity");
+        sheet["C1"] = CellValue.Text("Amount");
         sheet.Range("A1:C1").Style(style => style with
         {
             Font = style.Font with { Bold = true },
@@ -28,7 +28,7 @@ public static class XlsSample
 
         for (int row = 2; row <= 8; row++)
         {
-            sheet[row, 1] = CellValue.Text($"Товар {row - 1}");
+            sheet[row, 1] = CellValue.Text($"Product {row - 1}");
             sheet[row, 2] = CellValue.Number(row * 3);
             sheet.Cell(row, 3).SetFormula($"B{row}*100");
         }
@@ -38,10 +38,10 @@ public static class XlsSample
         sheet.FrozenRows = 1;
 
         // Notes, input rules and print settings all reach the binary format too.
-        sheet.Comments.Add("C9", "Проверено вручную", "Ревизор");
+        sheet.Comments.Add("C9", "Checked manually", "Reviewer");
         sheet.Validations.Add(DataValidation.WholeBetween("B2:B8", 1, 100));
         sheet.PageSetup.Orientation = PageOrientation.Landscape;
-        sheet.PageSetup.Header = new HeaderFooterText { Default = "&CОтчёт о продажах" };
+        sheet.PageSetup.Header = new HeaderFooterText { Default = "&CSales report" };
 
         // A formula in a .xls carries the value it last produced, so the file has to be
         // calculated before it is written or every formula cell reads as empty.
@@ -63,7 +63,7 @@ public static class XlsSample
         // When the format is not known up front, the signature decides rather than the name.
         // The same call opens a package locked with a password to open: Excel wraps one in the
         // very same container, so both arrive looking like a legacy workbook.
-        Workbook detected = await Spreadsheet.LoadAsync(legacyPath, new XlsLoadOptions { Password = "секрет" });
+        Workbook detected = await Spreadsheet.LoadAsync(legacyPath, new XlsLoadOptions { Password = "sample-password" });
         Console.WriteLine($"  auto-detected: {detected.Sheets.Count} sheet(s)");
 
         // And when only the values matter, the rows can be walked without a model at all.

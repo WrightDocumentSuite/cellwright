@@ -104,3 +104,13 @@ Console.WriteLine(sheet["B3"].GetNumber());
 See [formulas.md](formulas.md) for calculation details. Streaming millions of rows —
 [streaming.md](streaming.md). Worksheet features — [worksheet.md](worksheet.md). Typed rows —
 [mapping.md](mapping.md). Styles — [styles.md](styles.md).
+
+## Runnable examples
+
+Run `dotnet run --project samples/Cellwright.Samples` from the repository root.
+The program writes its workbooks and Markdown into `cellwright-samples` under
+the current process temporary directory and prints that location at startup.
+
+Public examples use English text for sheet names, headings, notes, metadata and
+console output. When changing sheet names or property keys, update formulas,
+lookups and validation values together so the examples still round-trip.
